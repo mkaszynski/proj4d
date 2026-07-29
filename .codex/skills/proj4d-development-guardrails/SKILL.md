@@ -14,11 +14,15 @@ Apply these invariants to every change in the Proj4D repository.
 - Keep the world unbounded and procedurally generated in all four axes.
 - Keep the real world unit as a `16x16x16x16` chunk with explicit 4D chunk and
   local coordinates, including correct floor division for negative positions.
-- Present a startup menu before world creation with `Flat` and `Normal`
+- Present a startup menu before world creation with `Flat`, `Low`, and `Normal`
   choices. Support keyboard and mouse selection.
 - Generate `Flat` as a four-dimensional superflat field: every block at
   `y <= 0` is solid, every block at `y > 0` is air, and the field is unbounded
   across `x`, `z`, and `w` and infinitely deep.
+- Generate `Low` as a four-dimensional superflat field matching Hypercraft
+  Flat's base ground height: every block at `y <= 18` is solid, every block at
+  `y > 18` is air, with no caves, trees, ores, biome layers, or other
+  decorations. Keep it unbounded across `x`, `z`, and `w` and infinitely deep.
 - Generate `Normal` with the original deterministic seeded four-dimensional
   density and noise terrain through `TerrainMode::Density`.
 - Represent each block as a tesseract with eight cubic boundary cells.
@@ -29,10 +33,10 @@ Apply these invariants to every change in the Proj4D repository.
 - Cull every cubic face whose neighboring tesseract is solid, including across
   chunk boundaries. Preserve exposed faces even when geometry overlaps after
   projection.
-- Keep the perfectly smooth superflat surface legible with one bounded outer
-  wireframe guide around the local render region, but never add that guide to a
-  Normal world. Do not restore internal grid lines between smoothly joined
-  surface cells.
+- Keep the perfectly smooth Flat and Low surfaces legible with one bounded
+  outer wireframe guide around the local render region, but never add that
+  guide to a Normal world. Do not restore internal grid lines between smoothly
+  joined surface cells.
 - Never treat a missing or not-yet-cached neighbor chunk as air. Generate it
   from the selected terrain mode under the bounded loading policy before
   deciding that a face is exposed.
@@ -77,7 +81,7 @@ Apply these invariants to every change in the Proj4D repository.
   boundaries, occluded-face culling, cache limits, edit survival, projection
   clipping, and ray interaction.
 - Run the complete build, CTest suite, and headless graphical smoke tests for
-  the menu, Flat, and Normal before handoff.
+  the menu, Flat, Low, and Normal before handoff.
 - Treat broken native frame rate or unbounded geometry growth as regressions.
 
 ## Keep the Repository Public-Safe

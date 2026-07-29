@@ -7,9 +7,11 @@
 namespace proj4d {
 
 inline constexpr int flatGroundSurfaceY = 0;
+inline constexpr int lowGroundSurfaceY = 18;
 
 enum class TerrainMode {
   Flat,
+  Low,
   Density,
 };
 

@@ -403,6 +403,7 @@ void testFlatTerrainAndPreservedDensityFunctions() {
   const proj4d::TerrainGenerator first(12345U);
   const proj4d::TerrainGenerator same(12345U);
   const proj4d::TerrainGenerator different(54321U);
+  const proj4d::TerrainGenerator low(12345U, proj4d::TerrainMode::Low);
   constexpr std::array<proj4d::BlockCoord, 6> samples{{
       {0, 0, 0, 0},
       {-17, 4, 23, -31},
@@ -465,6 +466,20 @@ void testFlatTerrainAndPreservedDensityFunctions() {
     expect(first.generatedSolidAt(surface) ==
                different.generatedSolidAt(surface),
            "active flat terrain is independent of the retained density seed");
+
+    proj4d::BlockCoord lowSurface = surface;
+    lowSurface.y = proj4d::lowGroundSurfaceY;
+    expect(low.surfaceHeightAt(lowSurface.x, lowSurface.z, lowSurface.w) ==
+               proj4d::lowGroundSurfaceY,
+           "Low terrain uses Hypercraft Flat's y=18 base ground height");
+    expect(low.generatedSolidAt(lowSurface),
+           "Low ground is solid everywhere at y=18");
+    ++lowSurface.y;
+    expect(!low.generatedSolidAt(lowSurface),
+           "Low terrain has only air above y=18");
+    lowSurface.y = -1000000;
+    expect(low.generatedSolidAt(lowSurface),
+           "Low terrain remains solid infinitely deep without caves");
   }
 
   const proj4d::Chunk surfaceChunk = first.generateChunk({7, 0, -9, 11});
@@ -479,21 +494,36 @@ void testFlatTerrainAndPreservedDensityFunctions() {
   expect(!skyChunk.isSolid({0, 0, 0, 0}),
          "arbitrarily high chunks are completely air");
 
+  const proj4d::Chunk lowSurfaceChunk = low.generateChunk({7, 1, -9, 11});
+  expect(lowSurfaceChunk.isSolid({0, 2, 0, 0}),
+         "Low chunks contain solid ground at world y=18");
+  expect(!lowSurfaceChunk.isSolid({0, 3, 0, 0}),
+         "Low chunks contain air immediately above world y=18");
+
   proj4d::BlockWorld flatWorld(12345U);
   expect(proj4d::buildFeatureEdges(flatWorld, {0, 2, 0, 0}, 4).size() == 12U,
          "smooth flat terrain retains only a bounded outer wireframe guide");
+  proj4d::BlockWorld lowWorld(proj4d::TerrainMode::Low, 12345U);
+  expect(proj4d::buildFeatureEdges(lowWorld, {0, 20, 0, 0}, 4).size() == 12U,
+         "smooth Low terrain retains only a bounded outer wireframe guide");
 }
 
 void testBlockWorldUsesTheSelectedTerrainMode() {
   constexpr std::uint32_t seed = 424242U;
   proj4d::BlockWorld flat(proj4d::TerrainMode::Flat, seed, 4U);
+  proj4d::BlockWorld low(proj4d::TerrainMode::Low, seed, 4U);
   proj4d::BlockWorld normal(proj4d::TerrainMode::Density, seed, 4U);
   const proj4d::TerrainGenerator original(seed, proj4d::TerrainMode::Density);
 
   expect(flat.terrainMode() == proj4d::TerrainMode::Flat,
          "Flat menu choice creates a flat BlockWorld");
+  expect(low.terrainMode() == proj4d::TerrainMode::Low,
+         "Low menu choice creates a y=18 superflat BlockWorld");
   expect(normal.terrainMode() == proj4d::TerrainMode::Density,
          "Normal menu choice creates a density BlockWorld");
+  expect(!flat.generatedSolidAt({0, proj4d::lowGroundSurfaceY, 0, 0}) &&
+             low.generatedSolidAt({0, proj4d::lowGroundSurfaceY, 0, 0}),
+         "Flat and Low choices preserve their distinct ground heights");
 
   bool modesDiffer = false;
   for (int w = -4; w <= 4 && !modesDiffer; w += 2) {

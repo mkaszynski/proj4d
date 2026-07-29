@@ -8,11 +8,13 @@ slices. Instead, a native 4D perspective camera produces a solid 3D image:
 4D tesseract world -> 3D vision cube -> ordinary 2D display
 ```
 
-At startup, a world menu offers two genuine four-dimensional terrain modes:
+At startup, a world menu offers three genuine four-dimensional terrain modes:
 
 - **Flat** is a superflat field where every block at `y <= 0` is solid and
   every block at `y > 0` is air, without limits in `x`, `z`, or `w` and without
   a lower depth limit.
+- **Low** is the same cave-free, decoration-free infinite field at `y = 18`,
+  matching the base ground height used by Hypercraft's Flat generator.
 - **Normal** uses the original seeded four-dimensional density and noise
   terrain from before the superflat world was introduced.
 
@@ -57,13 +59,14 @@ bitmaps of the menu or rendered vision cube:
 ```bash
 ./build/proj4d --menu-smoke-test --smoke-output proj4d-menu.bmp
 ./build/proj4d --smoke-test --smoke-output proj4d-smoke.bmp
+./build/proj4d --low-smoke-test --smoke-output proj4d-low.bmp
 ./build/proj4d --normal-smoke-test --smoke-output proj4d-normal.bmp
 ```
 
 ## Controls
 
-In the world menu, use the arrow keys and `Enter`, press `F` or `N`, or click a
-choice with the mouse.
+In the world menu, use the arrow keys and `Enter`, press `F`, `L`, or `N`, or
+click a choice with the mouse.
 
 | Input | Action |
 |---|---|
@@ -92,8 +95,9 @@ and axis-separated wall sliding.
 
 ## Architecture
 
-- `TerrainGenerator` owns both the infinite superflat and original deterministic
-  4D density modes selected by the startup menu.
+- `TerrainGenerator` owns the `y=0` Flat field, Hypercraft-height `y=18` Low
+  field, and original deterministic 4D density mode selected by the startup
+  menu.
 - `Chunk` stores exactly `16x16x16x16` blocks.
 - `BlockWorld` owns the selected terrain mode, lazy generation, durable edit
   overrides, and a bounded generated-chunk cache for the unbounded coordinate

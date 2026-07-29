@@ -121,12 +121,14 @@ bool TerrainGenerator::generatedSolidAt(const BlockCoord &coordinate) const {
   if (mode_ == TerrainMode::Density) {
     return densityAt(coordinate) > 0.0;
   }
-  return coordinate.y <= flatGroundSurfaceY;
+  const int surface =
+      mode_ == TerrainMode::Low ? lowGroundSurfaceY : flatGroundSurfaceY;
+  return coordinate.y <= surface;
 }
 
 int TerrainGenerator::surfaceHeightAt(int x, int z, int w) const {
-  if (mode_ == TerrainMode::Flat) {
-    return flatGroundSurfaceY;
+  if (mode_ != TerrainMode::Density) {
+    return mode_ == TerrainMode::Low ? lowGroundSurfaceY : flatGroundSurfaceY;
   }
   constexpr int maximumSurfaceSearch = 96;
   constexpr int minimumSurfaceSearch = -96;

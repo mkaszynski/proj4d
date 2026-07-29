@@ -10,6 +10,8 @@ int main(int argc, char **argv) {
     const std::string argument = argv[index];
     if (argument == "--smoke-test") {
       mode = proj4d::RunMode::FlatSmokeTest;
+    } else if (argument == "--low-smoke-test") {
+      mode = proj4d::RunMode::LowSmokeTest;
     } else if (argument == "--normal-smoke-test") {
       mode = proj4d::RunMode::NormalSmokeTest;
     } else if (argument == "--menu-smoke-test") {
@@ -18,8 +20,8 @@ int main(int argc, char **argv) {
       smokeOutput = argv[++index];
     } else if (argument == "--help") {
       std::cout << "Proj4D - a true projected 4D block world\n\n"
-                << "Usage: proj4d [--smoke-test | --normal-smoke-test | "
-                   "--menu-smoke-test]\n"
+                << "Usage: proj4d [--smoke-test | --low-smoke-test | "
+                   "--normal-smoke-test | --menu-smoke-test]\n"
                 << "              [--smoke-output FILE]\n";
       return 0;
     } else {

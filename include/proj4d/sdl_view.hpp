@@ -7,6 +7,7 @@ namespace proj4d {
 enum class RunMode {
   Interactive,
   FlatSmokeTest,
+  LowSmokeTest,
   NormalSmokeTest,
   MenuSmokeTest,
 };

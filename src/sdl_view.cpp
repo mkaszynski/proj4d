@@ -43,6 +43,33 @@ struct FeatureGeometryCache {
   std::vector<FeatureEdge4D> edges;
 };
 
+constexpr std::array<TerrainMode, 3> terrainChoices{
+    TerrainMode::Flat,
+    TerrainMode::Low,
+    TerrainMode::Density,
+};
+
+std::size_t terrainChoiceIndex(TerrainMode mode) {
+  for (std::size_t index = 0; index < terrainChoices.size(); ++index) {
+    if (terrainChoices[index] == mode) {
+      return index;
+    }
+  }
+  return 0U;
+}
+
+const char *terrainModeName(TerrainMode mode) {
+  switch (mode) {
+  case TerrainMode::Flat:
+    return "Flat";
+  case TerrainMode::Low:
+    return "Low";
+  case TerrainMode::Density:
+    return "Normal";
+  }
+  return "Flat";
+}
+
 std::optional<ScreenPoint> projectForDisplay(Vec3 point,
                                              const DisplayCamera &camera,
                                              int width, int height) {
@@ -257,8 +284,10 @@ void drawCenteredBitmapText(SDL_Renderer *renderer, const std::string &text,
 
 SDL_Rect terrainChoiceRect(int width, int height, TerrainMode mode) {
   const int buttonWidth = std::clamp(width - 80, 240, 440);
-  constexpr int buttonHeight = 84;
-  const int y = height / 2 + (mode == TerrainMode::Flat ? -98 : 20);
+  constexpr int buttonHeight = 72;
+  constexpr int buttonSpacing = 86;
+  const int y = height / 2 - 124 +
+                static_cast<int>(terrainChoiceIndex(mode)) * buttonSpacing;
   return {
       (width - buttonWidth) / 2,
       y,
@@ -287,14 +316,27 @@ void drawTerrainChoice(SDL_Renderer *renderer, const SDL_Rect &rectangle,
   }
   SDL_RenderDrawRect(renderer, &rectangle);
 
-  const std::string label = mode == TerrainMode::Flat ? "FLAT" : "NORMAL";
-  const std::string description =
-      mode == TerrainMode::Flat ? "INFINITE SUPERFLAT" : "ORIGINAL 4D TERRAIN";
+  std::string label;
+  std::string description;
+  switch (mode) {
+  case TerrainMode::Flat:
+    label = "FLAT";
+    description = "INFINITE SUPERFLAT Y 0";
+    break;
+  case TerrainMode::Low:
+    label = "LOW";
+    description = "HYPERCRAFT FLAT HEIGHT Y 18";
+    break;
+  case TerrainMode::Density:
+    label = "NORMAL";
+    description = "ORIGINAL 4D TERRAIN";
+    break;
+  }
   const int centerX = rectangle.x + rectangle.w / 2;
-  drawCenteredBitmapText(renderer, label, centerX, rectangle.y + 13, 3,
+  drawCenteredBitmapText(renderer, label, centerX, rectangle.y + 9, 3,
                          selected ? std::array<std::uint8_t, 3>{235, 255, 246}
                                   : std::array<std::uint8_t, 3>{188, 205, 220});
-  drawCenteredBitmapText(renderer, description, centerX, rectangle.y + 59, 1,
+  drawCenteredBitmapText(renderer, description, centerX, rectangle.y + 51, 1,
                          {145, 174, 198});
 }
 
@@ -309,14 +351,13 @@ void drawWorldMenu(SDL_Renderer *renderer, TerrainMode selected, int width,
   drawCenteredBitmapText(renderer, "CHOOSE TERRAIN", width / 2,
                          std::max(80, height / 7 + 52), 2, {104, 242, 175});
 
-  const SDL_Rect flat = terrainChoiceRect(width, height, TerrainMode::Flat);
+  for (const TerrainMode mode : terrainChoices) {
+    drawTerrainChoice(renderer, terrainChoiceRect(width, height, mode), mode,
+                      selected == mode);
+  }
+
   const SDL_Rect normal =
       terrainChoiceRect(width, height, TerrainMode::Density);
-  drawTerrainChoice(renderer, flat, TerrainMode::Flat,
-                    selected == TerrainMode::Flat);
-  drawTerrainChoice(renderer, normal, TerrainMode::Density,
-                    selected == TerrainMode::Density);
-
   drawCenteredBitmapText(renderer, "ARROWS ENTER OR CLICK", width / 2,
                          std::max(height - 54, normal.y + normal.h + 24), 2,
                          {126, 151, 174});
@@ -329,9 +370,11 @@ std::optional<TerrainMode> chooseTerrainMode(SDL_Renderer *renderer) {
     int width = 1;
     int height = 1;
     SDL_GetRendererOutputSize(renderer, &width, &height);
-    const SDL_Rect flat = terrainChoiceRect(width, height, TerrainMode::Flat);
-    const SDL_Rect normal =
-        terrainChoiceRect(width, height, TerrainMode::Density);
+    std::array<SDL_Rect, terrainChoices.size()> rectangles{};
+    for (std::size_t index = 0; index < terrainChoices.size(); ++index) {
+      rectangles[index] =
+          terrainChoiceRect(width, height, terrainChoices[index]);
+    }
 
     SDL_Event event{};
     while (SDL_PollEvent(&event) != 0) {
@@ -341,31 +384,37 @@ std::optional<TerrainMode> chooseTerrainMode(SDL_Renderer *renderer) {
       }
       if (event.type == SDL_KEYDOWN) {
         const SDL_Keycode key = event.key.keysym.sym;
-        if (key == SDLK_UP || key == SDLK_DOWN || key == SDLK_LEFT ||
-            key == SDLK_RIGHT || key == SDLK_TAB) {
-          selected = selected == TerrainMode::Flat ? TerrainMode::Density
-                                                   : TerrainMode::Flat;
+        if (key == SDLK_UP || key == SDLK_LEFT) {
+          const std::size_t index = terrainChoiceIndex(selected);
+          selected = terrainChoices[(index + terrainChoices.size() - 1U) %
+                                    terrainChoices.size()];
+        } else if (key == SDLK_DOWN || key == SDLK_RIGHT || key == SDLK_TAB) {
+          selected = terrainChoices[(terrainChoiceIndex(selected) + 1U) %
+                                    terrainChoices.size()];
         } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER ||
                    key == SDLK_SPACE) {
           return selected;
         } else if (key == SDLK_f) {
           return TerrainMode::Flat;
+        } else if (key == SDLK_l) {
+          return TerrainMode::Low;
         } else if (key == SDLK_n) {
           return TerrainMode::Density;
         }
       } else if (event.type == SDL_MOUSEMOTION) {
-        if (containsPoint(flat, event.motion.x, event.motion.y)) {
-          selected = TerrainMode::Flat;
-        } else if (containsPoint(normal, event.motion.x, event.motion.y)) {
-          selected = TerrainMode::Density;
+        for (std::size_t index = 0; index < terrainChoices.size(); ++index) {
+          if (containsPoint(rectangles[index], event.motion.x,
+                            event.motion.y)) {
+            selected = terrainChoices[index];
+          }
         }
       } else if (event.type == SDL_MOUSEBUTTONDOWN &&
                  event.button.button == SDL_BUTTON_LEFT) {
-        if (containsPoint(flat, event.button.x, event.button.y)) {
-          return TerrainMode::Flat;
-        }
-        if (containsPoint(normal, event.button.x, event.button.y)) {
-          return TerrainMode::Density;
+        for (std::size_t index = 0; index < terrainChoices.size(); ++index) {
+          if (containsPoint(rectangles[index], event.button.x,
+                            event.button.y)) {
+            return terrainChoices[index];
+          }
         }
       }
     }
@@ -484,6 +533,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   std::optional<TerrainMode> selectedTerrain;
   if (mode == RunMode::Interactive) {
     selectedTerrain = chooseTerrainMode(renderer);
+  } else if (mode == RunMode::LowSmokeTest) {
+    selectedTerrain = TerrainMode::Low;
   } else if (mode == RunMode::NormalSmokeTest) {
     selectedTerrain = TerrainMode::Density;
   } else {
@@ -496,8 +547,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
     return 0;
   }
 
-  const std::string worldName =
-      *selectedTerrain == TerrainMode::Flat ? "Flat" : "Normal";
+  const std::string worldName = terrainModeName(*selectedTerrain);
   SDL_SetWindowTitle(window, ("Proj4D | " + worldName +
                               " World | Mouse: 4D look | Shift: vertical | "
                               "Ctrl: orbit | WASDQE move")
