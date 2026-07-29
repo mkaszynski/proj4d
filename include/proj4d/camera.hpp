@@ -34,11 +34,12 @@ public:
   [[nodiscard]] double fourthAngle() const;
 
 private:
-  void rotateHorizontalPlane(Vec4 &imageAxis, double radians);
-  void rebuildPitchedFrame();
+  void rebuildFrame();
 
   Vec4 horizontalForward_{0.0, 0.0, 1.0, 0.0};
+  double horizontalAngle_{};
   double verticalPitch_{};
+  double fourthAngle_{};
 };
 
 } // namespace proj4d

@@ -72,6 +72,9 @@ bitmap of the rendered vision cube:
 | Right mouse button | Build beside the targeted tesseract |
 | `Escape` | Quit |
 
+The look controls use independent angles: `A`/`D` change only `H`,
+`Up`/`Down` change only `V`, and `Q`/`E` change only `4D`.
+
 The red, green, and blue arms at the center form the 3D crosshair. Boundary
 wireframes are tinted by which of the four world axes their cubic cell faces.
 The top status bar shows live `X`, `Y`, `Z`, and `W` coordinates plus ordinary

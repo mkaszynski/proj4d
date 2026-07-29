@@ -112,12 +112,33 @@ void testHorizontalLookKeepsTheViewLevel() {
          "left and right look do not roll or tilt the horizon");
 }
 
+void testHorizontalLookAxesRemainIndependent() {
+  proj4d::Camera4D camera;
+  camera.turnFourth(0.75);
+  camera.turnHorizontal(0.5);
+  expect(proj4d::nearlyEqual(camera.horizontalAngle(), 0.5),
+         "A and D change the ordinary horizontal angle");
+  expect(proj4d::nearlyEqual(camera.fourthAngle(), 0.75),
+         "A and D preserve the fourth-dimensional angle");
+
+  camera.turnFourth(0.2);
+  expect(proj4d::nearlyEqual(camera.horizontalAngle(), 0.5),
+         "Q and E preserve the ordinary horizontal angle");
+  expect(proj4d::nearlyEqual(camera.fourthAngle(), 0.95),
+         "Q and E change the fourth-dimensional angle");
+
+  camera.turnVertical(-0.3);
+  expect(proj4d::nearlyEqual(camera.horizontalAngle(), 0.5) &&
+             proj4d::nearlyEqual(camera.fourthAngle(), 0.95),
+         "vertical look preserves both horizontal angles");
+}
+
 void testViewStatusReportsFourCoordinatesAndThreeAngles() {
   proj4d::Camera4D camera;
   camera.position = {-12.25, 3.5, 42.0, 0.75};
-  camera.turnHorizontal(0.5);
-  camera.turnVertical(-0.25);
   camera.turnFourth(0.75);
+  camera.turnVertical(-0.25);
+  camera.turnHorizontal(0.5);
 
   expect(proj4d::nearlyEqual(camera.horizontalAngle(), 0.5),
          "camera reports its ordinary horizontal angle");
@@ -464,6 +485,7 @@ int main() {
     testCameraProjectionAndRotation();
     testVerticalLookStopsAtStraightUpAndDown();
     testHorizontalLookKeepsTheViewLevel();
+    testHorizontalLookAxesRemainIndependent();
     testViewStatusReportsFourCoordinatesAndThreeAngles();
     testGroundedPlayerCanMoveWithoutJumping();
     testPlayerSlidesAlongBlockedFaces();
