@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "proj4d/camera.hpp"
+#include "proj4d/mouse_input.hpp"
 #include "proj4d/player_motion.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/view_status.hpp"
@@ -498,8 +499,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   const std::string worldName =
       *selectedTerrain == TerrainMode::Flat ? "Flat" : "Normal";
   SDL_SetWindowTitle(window, ("Proj4D | " + worldName +
-                              " World | W/S move | Space jump | A/D + arrows "
-                              "+ Q/E look | LMB break | RMB build")
+                              " World | Mouse: 4D look | Ctrl+Mouse: orbit | "
+                              "W/S move | Space jump")
                                  .c_str());
   BlockWorld world(*selectedTerrain);
   Camera4D camera;
@@ -527,7 +528,9 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
               << "  A/D: turn left/right\n"
               << "  Up/Down: look up/down (limited to straight up/down)\n"
               << "  Q/E: turn through the fourth dimension\n"
-              << "  Mouse: orbit the solid 3D vision cube\n"
+              << "  Mouse left/right: turn like A/D\n"
+              << "  Mouse up/down: turn like Q/E\n"
+              << "  Hold Ctrl + mouse: orbit the solid 3D vision cube\n"
               << "  Mouse wheel: zoom the vision cube\n"
               << "  Left click: break a targeted tesseract\n"
               << "  Right click: build a tesseract\n"
@@ -551,10 +554,16 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                  event.key.keysym.sym == SDLK_ESCAPE) {
         running = false;
       } else if (event.type == SDL_MOUSEMOTION && !smokeTest) {
-        display.yaw += static_cast<double>(event.motion.xrel) * 0.004;
-        display.pitch = std::clamp(
-            display.pitch + static_cast<double>(event.motion.yrel) * 0.004,
-            -pi * 0.48, pi * 0.48);
+        const MouseMotionMapping mouseMotion =
+            mapMouseMotion(static_cast<double>(event.motion.xrel),
+                           static_cast<double>(event.motion.yrel),
+                           (SDL_GetModState() & KMOD_CTRL) != 0);
+        camera.turnHorizontal(mouseMotion.worldHorizontalTurn);
+        camera.turnFourth(mouseMotion.worldFourthTurn);
+        display.yaw += mouseMotion.visionCubeYawTurn;
+        display.pitch =
+            std::clamp(display.pitch + mouseMotion.visionCubePitchTurn,
+                       -pi * 0.48, pi * 0.48);
       } else if (event.type == SDL_MOUSEWHEEL) {
         display.distance = std::clamp(
             display.distance - static_cast<double>(event.wheel.y) * 0.2, 2.6,
@@ -600,7 +609,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
       const std::string title = "Proj4D | " + worldName +
                                 " | infinite 16^4 chunks | loaded " +
                                 std::to_string(world.loadedChunkCount()) +
-                                " | W/S move | A/D + arrows + Q/E look";
+                                " | Mouse: 4D look | Ctrl+Mouse: orbit";
       SDL_SetWindowTitle(window, title.c_str());
     }
     if (smokeTest && frameCount >= 3) {

@@ -72,7 +72,9 @@ choice with the mouse.
 | `A` / `D` | Turn left or right |
 | `Up` / `Down` | Look up or down, stopping at straight up or straight down |
 | `Q` / `E` | Turn through the fourth spatial dimension |
-| Mouse movement | Orbit the solid 3D vision cube |
+| Mouse left / right | Turn left or right in the 4D world, like `A` / `D` |
+| Mouse up / down | Turn through the fourth dimension, like `Q` / `E` |
+| Hold `Ctrl` + mouse movement | Orbit the solid 3D vision cube without changing the 4D view direction |
 | Mouse wheel | Zoom the external view of the vision cube |
 | Left mouse button | Break the targeted tesseract |
 | Right mouse button | Build beside the targeted tesseract |

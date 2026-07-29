@@ -17,6 +17,7 @@ add_library(proj4d_core
     src/camera.cpp
     src/chunk.cpp
     src/coordinates.cpp
+    src/mouse_input.cpp
     src/player_motion.cpp
     src/render_geometry.cpp
     src/terrain_generator.cpp

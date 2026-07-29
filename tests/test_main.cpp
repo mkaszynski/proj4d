@@ -8,6 +8,7 @@
 
 #include "proj4d/camera.hpp"
 #include "proj4d/chunk.hpp"
+#include "proj4d/mouse_input.hpp"
 #include "proj4d/player_motion.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/terrain_generator.hpp"
@@ -110,6 +111,34 @@ void testHorizontalLookKeepsTheViewLevel() {
          "left and right look follow a level circle");
   expect(proj4d::nearlyEqual(camera.imageX.y, 0.0),
          "left and right look do not roll or tilt the horizon");
+}
+
+void testMouseMovementTurnsInOrdinaryAndFourthDimensions() {
+  const proj4d::MouseMotionMapping worldMotion =
+      proj4d::mapMouseMotion(25.0, -50.0, false);
+  proj4d::Camera4D camera;
+  camera.turnHorizontal(worldMotion.worldHorizontalTurn);
+  camera.turnFourth(worldMotion.worldFourthTurn);
+
+  expect(proj4d::nearlyEqual(camera.horizontalAngle(), 0.1, 1.0e-8),
+         "rightward mouse movement turns in the same direction as D");
+  expect(proj4d::nearlyEqual(camera.fourthAngle(), -0.2, 1.0e-8),
+         "upward mouse movement turns in the same direction as Q");
+  expect(proj4d::nearlyEqual(camera.verticalPitch(), 0.0),
+         "ordinary mouse look does not change vertical pitch");
+  expect(proj4d::nearlyEqual(worldMotion.visionCubeYawTurn, 0.0) &&
+             proj4d::nearlyEqual(worldMotion.visionCubePitchTurn, 0.0),
+         "unmodified mouse movement does not orbit the vision cube");
+
+  const proj4d::MouseMotionMapping controlMotion =
+      proj4d::mapMouseMotion(25.0, -50.0, true);
+  expect(proj4d::nearlyEqual(controlMotion.worldHorizontalTurn, 0.0) &&
+             proj4d::nearlyEqual(controlMotion.worldFourthTurn, 0.0),
+         "Ctrl plus mouse leaves the 4D world look unchanged");
+  expect(
+      proj4d::nearlyEqual(controlMotion.visionCubeYawTurn, 0.1, 1.0e-8) &&
+          proj4d::nearlyEqual(controlMotion.visionCubePitchTurn, -0.2, 1.0e-8),
+      "Ctrl plus mouse retains the original vision-cube orbit");
 }
 
 void testViewStatusReportsFourCoordinatesAndThreeAngles() {
@@ -542,6 +571,7 @@ int main() {
     testCameraProjectionAndRotation();
     testVerticalLookStopsAtStraightUpAndDown();
     testHorizontalLookKeepsTheViewLevel();
+    testMouseMovementTurnsInOrdinaryAndFourthDimensions();
     testViewStatusReportsFourCoordinatesAndThreeAngles();
     testGroundedPlayerCanMoveWithoutJumping();
     testPlayerPhysicsMatchesHypercraft();
