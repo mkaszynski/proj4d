@@ -34,9 +34,8 @@ Apply these invariants to every change in the Proj4D repository.
 - Never treat a missing or not-yet-cached neighbor chunk as air. Generate its
   superflat terrain under the bounded loading policy before deciding that a face
   is exposed.
-- Keep the three look angles independent: `A`/`D` change only ordinary
-  horizontal `H`, `Up`/`Down` change only vertical `V`, and `Q`/`E` change only
-  fourth-dimensional `4D`.
+- Keep the three independent look rotations: vertical, ordinary horizontal,
+  and fourth-dimensional horizontal.
 
 ## Keep Ownership Clear
 
