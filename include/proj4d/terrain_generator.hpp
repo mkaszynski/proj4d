@@ -7,7 +7,7 @@
 namespace proj4d {
 
 inline constexpr int flatGroundSurfaceY = 0;
-inline constexpr int lowGroundSurfaceY = 18;
+inline constexpr double hypercraftFlatBaseHeight = 18.0;
 
 enum class TerrainMode {
   Flat,
@@ -33,6 +33,20 @@ private:
   [[nodiscard]] double fractalNoise4D(double x, double y, double z,
                                       double w) const;
   [[nodiscard]] double heightGuideAt(int x, int z, int w) const;
+  [[nodiscard]] double hypercraftPerlinNoise3D(double x, double y, double z,
+                                               std::uint32_t salt) const;
+  [[nodiscard]] double hypercraftPerlinNoise4D(double x, double y, double z,
+                                               double w,
+                                               std::uint32_t salt) const;
+  [[nodiscard]] double hypercraftFractalNoise3D(double x, double y,
+                                                double z) const;
+  [[nodiscard]] double hypercraftFractalNoise4D(double x, double y, double z,
+                                                double w) const;
+  [[nodiscard]] double hypercraftFlatHeightGuideAt(int x, int z, int w) const;
+  [[nodiscard]] double hypercraftFlatDensityAt(const BlockCoord &coordinate,
+                                               double heightGuide) const;
+  [[nodiscard]] bool hypercraftFlatSolidAt(const BlockCoord &coordinate,
+                                           double heightGuide) const;
 
   std::uint32_t seed_{};
   TerrainMode mode_{};

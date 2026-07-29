@@ -325,7 +325,7 @@ void drawTerrainChoice(SDL_Renderer *renderer, const SDL_Rect &rectangle,
     break;
   case TerrainMode::Low:
     label = "LOW";
-    description = "HYPERCRAFT FLAT HEIGHT Y 18";
+    description = "HYPERCRAFT FLAT TERRAIN";
     break;
   case TerrainMode::Density:
     label = "NORMAL";

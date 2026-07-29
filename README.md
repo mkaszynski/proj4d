@@ -13,8 +13,10 @@ At startup, a world menu offers three genuine four-dimensional terrain modes:
 - **Flat** is a superflat field where every block at `y <= 0` is solid and
   every block at `y > 0` is air, without limits in `x`, `z`, or `w` and without
   a lower depth limit.
-- **Low** is the same cave-free, decoration-free infinite field at `y = 18`,
-  matching the base ground height used by Hypercraft's Flat generator.
+- **Low** reproduces Hypercraft's seeded Flat terrain shape: a gently varying
+  four-dimensional density surface centered around `y = 18`, without its
+  caves, trees, ores, fluids, biome layers, or other decorations. It remains
+  infinitely deep.
 - **Normal** uses the original seeded four-dimensional density and noise
   terrain from before the superflat world was introduced.
 
@@ -28,9 +30,10 @@ the neighboring tesseract on that side is air, including across chunk
 boundaries. The renderer projects those exposed cells into the vision cube and
 suppresses wireframes across smooth faces and two-face ridges. Only true 4D
 feature edges, where at least three boundary orientations meet, remain. Because
-the superflat surface is perfectly smooth, the renderer also retains one
-bounded outer guide around the nearby field instead of restoring a cluttered
-internal block grid.
+the `y=0` Flat surface is perfectly smooth, the renderer also retains one
+bounded outer guide around that nearby field instead of restoring a cluttered
+internal block grid. Low and Normal render only their generated terrain
+features.
 
 ## Build
 
@@ -95,9 +98,9 @@ and axis-separated wall sliding.
 
 ## Architecture
 
-- `TerrainGenerator` owns the `y=0` Flat field, Hypercraft-height `y=18` Low
-  field, and original deterministic 4D density mode selected by the startup
-  menu.
+- `TerrainGenerator` owns the `y=0` Flat field, Hypercraft-compatible Low
+  density terrain, and original deterministic 4D density mode selected by the
+  startup menu.
 - `Chunk` stores exactly `16x16x16x16` blocks.
 - `BlockWorld` owns the selected terrain mode, lazy generation, durable edit
   overrides, and a bounded generated-chunk cache for the unbounded coordinate
@@ -115,8 +118,9 @@ and axis-separated wall sliding.
   blocked by solid neighbors, and clips projected feature edges to the cube.
 - The SDL layer owns input, the final 3D-to-2D display projection, and drawing.
 - Tests exercise 4D camera math, negative chunk coordinates, the infinite flat
-  boundary, preserved density determinism, infinite depth, cache eviction, edit
-  survival, occluded-face culling, ray targeting, and projected-volume clipping.
+  boundary, golden Hypercraft Flat surface parity, preserved density
+  determinism, infinite depth, cache eviction, edit survival, occluded-face
+  culling, ray targeting, and projected-volume clipping.
 
 See the repository's
 [Proj4D development skill](.codex/skills/proj4d-development-guardrails/SKILL.md)

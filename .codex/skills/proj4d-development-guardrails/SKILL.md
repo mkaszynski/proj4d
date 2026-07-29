@@ -19,10 +19,11 @@ Apply these invariants to every change in the Proj4D repository.
 - Generate `Flat` as a four-dimensional superflat field: every block at
   `y <= 0` is solid, every block at `y > 0` is air, and the field is unbounded
   across `x`, `z`, and `w` and infinitely deep.
-- Generate `Low` as a four-dimensional superflat field matching Hypercraft
-  Flat's base ground height: every block at `y <= 18` is solid, every block at
-  `y > 18` is air, with no caves, trees, ores, biome layers, or other
-  decorations. Keep it unbounded across `x`, `z`, and `w` and infinitely deep.
+- Generate `Low` from Hypercraft Flat's exact seeded height-guide noise, 4D
+  density noise, and 1000x vertical falloff. Preserve its varying raw density
+  surface around the `y = 18` base level, but exclude caves, trees, ores,
+  fluids, biome layers, and other decorations. Keep it unbounded across `x`,
+  `z`, and `w` and infinitely deep.
 - Generate `Normal` with the original deterministic seeded four-dimensional
   density and noise terrain through `TerrainMode::Density`.
 - Represent each block as a tesseract with eight cubic boundary cells.
@@ -33,10 +34,10 @@ Apply these invariants to every change in the Proj4D repository.
 - Cull every cubic face whose neighboring tesseract is solid, including across
   chunk boundaries. Preserve exposed faces even when geometry overlaps after
   projection.
-- Keep the perfectly smooth Flat and Low surfaces legible with one bounded
-  outer wireframe guide around the local render region, but never add that
-  guide to a Normal world. Do not restore internal grid lines between smoothly
-  joined surface cells.
+- Keep the perfectly smooth `y=0` Flat surface legible with one bounded outer
+  wireframe guide around the local render region. Never add that guide to Low
+  or Normal; render their generated terrain feature edges. Do not restore
+  internal grid lines between smoothly joined surface cells.
 - Never treat a missing or not-yet-cached neighbor chunk as air. Generate it
   from the selected terrain mode under the bounded loading policy before
   deciding that a face is exposed.
@@ -76,10 +77,10 @@ Apply these invariants to every change in the Proj4D repository.
 - Cache topology extraction independently from camera projection so ordinary
   look rotation does not regenerate chunks or rescan blocks.
 - Add tests for every behavior change, especially 4D basis orthogonality,
-  negative chunk math, menu mode routing, the flat `y=0` boundary across distant
-  `x/z/w` coordinates, Normal density determinism, deep terrain, chunk
-  boundaries, occluded-face culling, cache limits, edit survival, projection
-  clipping, and ray interaction.
+  negative chunk math, menu mode routing, the flat `y=0` boundary across
+  distant `x/z/w` coordinates, Low golden parity with Hypercraft Flat, Normal
+  density determinism, deep terrain, chunk boundaries, occluded-face culling,
+  cache limits, edit survival, projection clipping, and ray interaction.
 - Run the complete build, CTest suite, and headless graphical smoke tests for
   the menu, Flat, Low, and Normal before handoff.
 - Treat broken native frame rate or unbounded geometry growth as regressions.
