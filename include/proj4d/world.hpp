@@ -1,41 +1,16 @@
 #pragma once
 
-#include <array>
-#include <compare>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 #include "proj4d/math.hpp"
+#include "proj4d/terrain_generator.hpp"
 
 namespace proj4d {
-
-struct BlockCoord {
-  int x{};
-  int y{};
-  int z{};
-  int w{};
-
-  [[nodiscard]] int &operator[](std::size_t index) {
-    return *std::array<int *, 4>{&x, &y, &z, &w}.at(index);
-  }
-  [[nodiscard]] int operator[](std::size_t index) const {
-    return std::array<int, 4>{x, y, z, w}.at(index);
-  }
-  [[nodiscard]] auto operator<=>(const BlockCoord &) const = default;
-};
-
-struct WorldBounds {
-  BlockCoord minimum{-4, -3, -4, -4};
-  BlockCoord maximum{4, 4, 4, 4};
-};
-
-struct BoundaryCell {
-  BlockCoord block{};
-  int axis{};
-  int side{};
-};
 
 struct RayHit {
   BlockCoord block{};
@@ -45,20 +20,33 @@ struct RayHit {
 
 class BlockWorld {
 public:
-  explicit BlockWorld(WorldBounds bounds = {});
-  void fillFlatGround();
-  [[nodiscard]] bool inBounds(const BlockCoord &coordinate) const;
+  explicit BlockWorld(std::uint32_t seed = 0x4D2026U,
+                      std::size_t maximumLoadedChunks = 96U);
+
   [[nodiscard]] bool isSolid(const BlockCoord &coordinate) const;
+  [[nodiscard]] bool generatedSolidAt(const BlockCoord &coordinate) const;
   [[nodiscard]] bool setSolid(const BlockCoord &coordinate, bool solid);
-  [[nodiscard]] std::size_t solidCount() const;
-  [[nodiscard]] const WorldBounds &bounds() const;
-  [[nodiscard]] std::vector<BoundaryCell> exposedBoundaryCells() const;
+  [[nodiscard]] int surfaceHeightAt(int x, int z, int w) const;
+  [[nodiscard]] std::uint32_t seed() const;
+  [[nodiscard]] std::size_t loadedChunkCount() const;
+  [[nodiscard]] std::size_t maximumLoadedChunks() const;
+  [[nodiscard]] std::uint64_t revision() const;
 
 private:
-  [[nodiscard]] std::size_t indexOf(const BlockCoord &coordinate) const;
-  WorldBounds bounds_{};
-  std::array<int, 4> extents_{};
-  std::vector<bool> blocks_{};
+  struct CachedChunk {
+    Chunk chunk;
+    std::uint64_t lastAccess{};
+  };
+
+  [[nodiscard]] Chunk &ensureChunk(const ChunkCoord &coordinate) const;
+  void evictLeastRecentlyUsed(const ChunkCoord &protectedChunk) const;
+
+  TerrainGenerator generator_;
+  std::size_t maximumLoadedChunks_{};
+  mutable std::uint64_t accessClock_{};
+  mutable std::unordered_map<ChunkCoord, CachedChunk, ChunkCoordHash> chunks_;
+  std::unordered_map<BlockCoord, bool, BlockCoordHash> overrides_;
+  std::uint64_t revision_{};
 };
 
 [[nodiscard]] BlockCoord containingBlock(const Vec4 &point);

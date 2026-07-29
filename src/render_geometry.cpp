@@ -21,7 +21,7 @@ std::array<int, 3> cellAxes(int boundaryAxis) {
   return axes;
 }
 
-BlockCoord cellVertex(const BoundaryCell &cell, int bitMask) {
+BlockCoord cellVertex(const VisibleBoundaryCell4D &cell, int bitMask) {
   BlockCoord vertex = cell.block;
   vertex[static_cast<std::size_t>(cell.axis)] += cell.side > 0 ? 1 : 0;
   const auto axes = cellAxes(cell.axis);
@@ -83,9 +83,13 @@ std::optional<Line3> projectEdge(const Camera4D &camera, Vec4 from, Vec4 to,
 
 } // namespace
 
-std::vector<FeatureEdge4D> buildFeatureEdges(const BlockWorld &world) {
+std::vector<FeatureEdge4D> buildFeatureEdges(const BlockWorld &world,
+                                             const BlockCoord &center,
+                                             int radius) {
   std::map<EdgeKey, EdgeIncidence> incidences;
-  for (const BoundaryCell &cell : world.exposedBoundaryCells()) {
+  const std::vector<VisibleBoundaryCell4D> visibleCells =
+      buildVisibleBoundaryCells(world, center, radius);
+  for (const VisibleBoundaryCell4D &cell : visibleCells) {
     const auto axes = cellAxes(cell.axis);
     const std::size_t normalIndex =
         static_cast<std::size_t>(cell.axis * 2 + (cell.side > 0 ? 1 : 0));
@@ -129,6 +133,37 @@ std::vector<FeatureEdge4D> buildFeatureEdges(const BlockWorld &world) {
   return edges;
 }
 
+std::vector<VisibleBoundaryCell4D>
+buildVisibleBoundaryCells(const BlockWorld &world, const BlockCoord &center,
+                          int radius) {
+  if (radius < 0) {
+    return {};
+  }
+  std::vector<VisibleBoundaryCell4D> visibleCells;
+  for (int w = center.w - radius; w <= center.w + radius; ++w) {
+    for (int z = center.z - radius; z <= center.z + radius; ++z) {
+      for (int y = center.y - radius; y <= center.y + radius; ++y) {
+        for (int x = center.x - radius; x <= center.x + radius; ++x) {
+          const BlockCoord block{x, y, z, w};
+          if (!world.isSolid(block)) {
+            continue;
+          }
+          for (int axis = 0; axis < 4; ++axis) {
+            for (const int side : {-1, 1}) {
+              BlockCoord neighbor = block;
+              neighbor[static_cast<std::size_t>(axis)] += side;
+              if (!world.isSolid(neighbor)) {
+                visibleCells.push_back({block, axis, side});
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return visibleCells;
+}
+
 std::optional<Line3> clipLineToVisionCube(Line3 line) {
   double minimumAmount = 0.0;
   double maximumAmount = 1.0;
@@ -159,10 +194,9 @@ std::optional<Line3> clipLineToVisionCube(Line3 line) {
   return line;
 }
 
-std::vector<Line3> buildVisionGeometry(const BlockWorld &world,
+std::vector<Line3> projectFeatureEdges(std::span<const FeatureEdge4D> edges,
                                        const Camera4D &camera) {
   std::vector<Line3> lines;
-  const std::vector<FeatureEdge4D> edges = buildFeatureEdges(world);
   lines.reserve(edges.size());
   for (const FeatureEdge4D &edge : edges) {
     if (auto line = projectEdge(camera, edge.from, edge.to,
@@ -171,6 +205,12 @@ std::vector<Line3> buildVisionGeometry(const BlockWorld &world,
     }
   }
   return lines;
+}
+
+std::vector<Line3> buildVisionGeometry(const BlockWorld &world,
+                                       const Camera4D &camera,
+                                       const BlockCoord &center, int radius) {
+  return projectFeatureEdges(buildFeatureEdges(world, center, radius), camera);
 }
 
 std::vector<Line3> buildTesseractWireframe(const BlockCoord &block,

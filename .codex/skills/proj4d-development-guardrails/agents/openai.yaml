@@ -1,4 +1,4 @@
 interface:
   display_name: "Proj4D Development Guardrails"
-  short_description: "Preserve true 4D gameplay and public safety"
+  short_description: "Preserve infinite 4D chunks and public safety"
   default_prompt: "Use $proj4d-development-guardrails to develop and validate Proj4D safely."

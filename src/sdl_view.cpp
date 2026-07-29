@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,6 +32,13 @@ struct DisplayCamera {
 struct ScreenPoint {
   int x{};
   int y{};
+};
+
+struct FeatureGeometryCache {
+  BlockCoord center{};
+  std::uint64_t worldRevision{std::numeric_limits<std::uint64_t>::max()};
+  bool initialized{};
+  std::vector<FeatureEdge4D> edges;
 };
 
 std::optional<ScreenPoint> projectForDisplay(Vec3 point,
@@ -115,11 +123,20 @@ void drawCrosshair(SDL_Renderer *renderer, const DisplayCamera &display,
 
 void render(SDL_Renderer *renderer, const BlockWorld &world,
             const Camera4D &camera, const DisplayCamera &display, int width,
-            int height) {
+            int height, FeatureGeometryCache &geometryCache) {
   SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
   SDL_RenderClear(renderer);
   drawVisionCube(renderer, display, width, height);
-  const std::vector<Line3> lines = buildVisionGeometry(world, camera);
+  const BlockCoord center = containingBlock(camera.position);
+  if (!geometryCache.initialized || geometryCache.center != center ||
+      geometryCache.worldRevision != world.revision()) {
+    geometryCache.center = center;
+    geometryCache.worldRevision = world.revision();
+    geometryCache.edges = buildFeatureEdges(world, center);
+    geometryCache.initialized = true;
+  }
+  const std::vector<Line3> lines =
+      projectFeatureEdges(geometryCache.edges, camera);
   constexpr std::array<std::array<std::uint8_t, 3>, 4> colors{{
       {245, 140, 140},
       {150, 245, 165},
@@ -141,23 +158,13 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
 
 void updatePlayer(Camera4D &camera, const BlockWorld &world,
                   double &verticalVelocity, bool &grounded, double moveInput,
-                  double deltaSeconds) {
+                  double deltaSeconds, const Vec4 &spawnPosition) {
   constexpr double movementSpeed = 2.4;
   constexpr double gravity = -8.5;
   if (moveInput != 0.0) {
     const Vec4 movement =
         camera.flattenedForward() * (moveInput * movementSpeed * deltaSeconds);
-    Vec4 candidate = camera.position + movement;
-    const WorldBounds &bounds = world.bounds();
-    candidate.x =
-        std::clamp(candidate.x, static_cast<double>(bounds.minimum.x) - 0.5,
-                   static_cast<double>(bounds.maximum.x) + 1.5);
-    candidate.z =
-        std::clamp(candidate.z, static_cast<double>(bounds.minimum.z) - 0.5,
-                   static_cast<double>(bounds.maximum.z) + 1.5);
-    candidate.w =
-        std::clamp(candidate.w, static_cast<double>(bounds.minimum.w) - 0.5,
-                   static_cast<double>(bounds.maximum.w) + 1.5);
+    const Vec4 candidate = camera.position + movement;
     if (!world.isSolid(containingBlock(candidate)) &&
         !world.isSolid(containingBlock({candidate.x, candidate.y - eyeHeight,
                                         candidate.z, candidate.w}))) {
@@ -180,8 +187,8 @@ void updatePlayer(Camera4D &camera, const BlockWorld &world,
   } else {
     grounded = false;
   }
-  if (camera.position.y < static_cast<double>(world.bounds().minimum.y) - 4.0) {
-    camera.position = {0.5, 2.1, -3.5, 0.5};
+  if (camera.position.y < -4096.0) {
+    camera.position = spawnPosition;
     verticalVelocity = 0.0;
   }
 }
@@ -243,10 +250,18 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
   }
 
   BlockWorld world;
-  world.fillFlatGround();
   Camera4D camera;
+  const int spawnSurface = world.surfaceHeightAt(0, 0, 0);
+  const Vec4 spawnPosition{
+      0.5,
+      static_cast<double>(spawnSurface + 1) + eyeHeight,
+      0.5,
+      0.5,
+  };
+  camera.position = spawnPosition;
   camera.turnVertical(-0.28);
   DisplayCamera display;
+  FeatureGeometryCache geometryCache;
   double verticalVelocity = 0.0;
   bool grounded = true;
   bool running = true;
@@ -330,14 +345,20 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
                        (keys[SDL_SCANCODE_Q] != 0 ? 1.0 : 0.0)) *
                       turnSpeed * deltaSeconds);
     updatePlayer(camera, world, verticalVelocity, grounded, movement,
-                 deltaSeconds);
+                 deltaSeconds, spawnPosition);
 
     int width = initialWidth;
     int height = initialHeight;
     SDL_GetRendererOutputSize(renderer, &width, &height);
-    render(renderer, world, camera, display, width, height);
+    render(renderer, world, camera, display, width, height, geometryCache);
 
     ++frameCount;
+    if (!smokeTest && frameCount % 60 == 0) {
+      const std::string title = "Proj4D | infinite 16^4 chunks | loaded " +
+                                std::to_string(world.loadedChunkCount()) +
+                                " | W/S move | A/D + arrows + Q/E look";
+      SDL_SetWindowTitle(window, title.c_str());
+    }
     if (smokeTest && frameCount >= 3) {
       if (!saveRendererBitmap(renderer, width, height, smokeOutput)) {
         std::cerr << "Could not save smoke image: " << SDL_GetError() << '\n';
