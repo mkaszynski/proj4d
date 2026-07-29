@@ -54,6 +54,51 @@ struct EdgeIncidence {
   std::bitset<8> boundaryNormals{};
 };
 
+void appendFlatSurfaceGuide(std::vector<FeatureEdge4D> &edges,
+                            const BlockCoord &center, int radius) {
+  if (center.y - radius > flatGroundSurfaceY ||
+      center.y + radius < flatGroundSurfaceY) {
+    return;
+  }
+
+  const BlockCoord minimum{
+      center.x - radius,
+      flatGroundSurfaceY + 1,
+      center.z - radius,
+      center.w - radius,
+  };
+  const BlockCoord maximum{
+      center.x + radius + 1,
+      flatGroundSurfaceY + 1,
+      center.z + radius + 1,
+      center.w + radius + 1,
+  };
+  constexpr std::array<int, 3> horizontalAxes{0, 2, 3};
+  for (const int edgeAxis : horizontalAxes) {
+    std::array<int, 2> fixedAxes{};
+    int fixedIndex = 0;
+    for (const int axis : horizontalAxes) {
+      if (axis != edgeAxis) {
+        fixedAxes[static_cast<std::size_t>(fixedIndex++)] = axis;
+      }
+    }
+    for (int corner = 0; corner < 4; ++corner) {
+      BlockCoord from = minimum;
+      for (int bit = 0; bit < 2; ++bit) {
+        if ((corner & (1 << bit)) != 0) {
+          const std::size_t axis = static_cast<std::size_t>(
+              fixedAxes[static_cast<std::size_t>(bit)]);
+          from[axis] = maximum[axis];
+        }
+      }
+      BlockCoord to = from;
+      to[static_cast<std::size_t>(edgeAxis)] =
+          maximum[static_cast<std::size_t>(edgeAxis)];
+      edges.push_back({toVec4(from), toVec4(to), 1});
+    }
+  }
+}
+
 Vec4 edgeMidpoint(const FeatureEdge4D &edge) {
   return (edge.from + edge.to) * 0.5;
 }
@@ -147,6 +192,7 @@ std::vector<FeatureEdge4D> buildFeatureEdges(const BlockWorld &world,
     }
     edges.push_back({toVec4(key.lower), toVec4(upper), representativeAxis});
   }
+  appendFlatSurfaceGuide(edges, center, radius);
   return edges;
 }
 

@@ -8,10 +8,12 @@ slices. Instead, a native 4D perspective camera produces a solid 3D image:
 4D tesseract world -> 3D vision cube -> ordinary 2D display
 ```
 
-The world is unbounded in all four axes and is generated deterministically from
-a four-dimensional density field. It becomes solid without limit at deep
-negative `y`, while the surface can contain overhangs and multiple solid/air
-transitions rather than one height per horizontal position.
+The active world is a four-dimensional superflat field: every block at `y <= 0`
+is solid and every block at `y > 0` is air, without limits in `x`, `z`, or `w`
+and without a lower depth limit. The original seeded four-dimensional density
+and noise functions remain in the generator for possible future terrain modes,
+and the original terrain remains selectable through `TerrainMode::Density`,
+but the game itself uses `TerrainMode::Flat`.
 
 The unit of generation and storage is a real `16x16x16x16` chunk containing
 65,536 tesseracts. Nearby chunks generate lazily, a bounded least-recently-used
@@ -22,7 +24,10 @@ Every tesseract has eight cubical boundary cells. A cell is visible only when
 the neighboring tesseract on that side is air, including across chunk
 boundaries. The renderer projects those exposed cells into the vision cube and
 suppresses wireframes across smooth faces and two-face ridges. Only true 4D
-feature edges, where at least three boundary orientations meet, remain.
+feature edges, where at least three boundary orientations meet, remain. Because
+the superflat surface is perfectly smooth, the renderer also retains one
+bounded outer guide around the nearby field instead of restoring a cluttered
+internal block grid.
 
 ## Build
 
@@ -75,20 +80,21 @@ degrees.
 
 ## Architecture
 
-- `TerrainGenerator` owns the deterministic 4D density field.
+- `TerrainGenerator` generates the infinite superflat world and retains the
+  original deterministic 4D density terrain as an explicit optional mode.
 - `Chunk` stores exactly `16x16x16x16` blocks.
 - `BlockWorld` owns lazy generation, durable edit overrides, and a bounded
   generated-chunk cache for the unbounded coordinate space.
 - `Camera4D` owns an orthonormal four-axis camera frame and performs true
   4D-to-3D perspective projection with level yaw and bounded vertical pitch.
 - View-dependent sightline culling prevents nearer solid terrain from exposing
-  wireframes belonging to hidden caves.
+  wireframes belonging to hidden player-made cavities.
 - `buildVisionGeometry` examines a fixed local 4D region, rejects cubic faces
   blocked by solid neighbors, and clips projected feature edges to the cube.
 - The SDL layer owns input, the final 3D-to-2D display projection, and drawing.
-- Tests exercise 4D camera math, negative chunk coordinates, procedural
-  determinism, infinite depth, cache eviction, edit survival, occluded-face
-  culling, ray targeting, and projected-volume clipping.
+- Tests exercise 4D camera math, negative chunk coordinates, the infinite flat
+  boundary, preserved density determinism, infinite depth, cache eviction, edit
+  survival, occluded-face culling, ray targeting, and projected-volume clipping.
 
 See the repository's
 [Proj4D development skill](.codex/skills/proj4d-development-guardrails/SKILL.md)

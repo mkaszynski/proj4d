@@ -262,7 +262,7 @@ void testTrueFourDimensionalChunks() {
          "neighboring w coordinate remains independent");
 }
 
-void testProceduralDensityField() {
+void testFlatTerrainAndPreservedDensityFunctions() {
   const proj4d::TerrainGenerator first(12345U);
   const proj4d::TerrainGenerator same(12345U);
   const proj4d::TerrainGenerator different(54321U);
@@ -279,39 +279,72 @@ void testProceduralDensityField() {
   for (const proj4d::BlockCoord &coordinate : samples) {
     expect(proj4d::nearlyEqual(first.densityAt(coordinate),
                                same.densityAt(coordinate)),
-           "the same seed reproduces identical 4D density");
+           "the preserved density function remains deterministic");
     if (!proj4d::nearlyEqual(first.densityAt(coordinate),
                              different.densityAt(coordinate), 1.0e-6)) {
       seedChangesTerrain = true;
     }
   }
-  expect(seedChangesTerrain, "different seeds produce different terrain");
-  expect(first.generatedSolidAt({1000000, -1000000, -1000000, 500000}),
-         "terrain remains solid at arbitrarily deep negative y");
+  expect(seedChangesTerrain,
+         "different seeds remain available to the preserved density function");
+  expect(first.mode() == proj4d::TerrainMode::Flat,
+         "the active terrain generator defaults to flat mode");
 
-  const int surface = first.surfaceHeightAt(0, 0, 0);
-  expect(first.generatedSolidAt({0, surface, 0, 0}),
-         "surface search returns a solid block");
-  expect(!first.generatedSolidAt({0, surface + 1, 0, 0}),
-         "surface search returns the highest solid block");
-
-  bool foundMultipleTransitions = false;
-  for (int x = -8; x <= 8 && !foundMultipleTransitions; x += 2) {
-    for (int z = -8; z <= 8 && !foundMultipleTransitions; z += 2) {
-      for (int w = -8; w <= 8 && !foundMultipleTransitions; w += 2) {
-        int transitions = 0;
-        bool previous = first.generatedSolidAt({x, -20, z, w});
-        for (int y = -19; y <= 28; ++y) {
-          const bool current = first.generatedSolidAt({x, y, z, w});
-          transitions += current != previous ? 1 : 0;
-          previous = current;
-        }
-        foundMultipleTransitions = transitions >= 3;
-      }
-    }
+  const proj4d::TerrainGenerator legacyDensity(12345U,
+                                               proj4d::TerrainMode::Density);
+  expect(legacyDensity.mode() == proj4d::TerrainMode::Density,
+         "the original density terrain remains selectable");
+  for (const proj4d::BlockCoord &coordinate : samples) {
+    expect(legacyDensity.generatedSolidAt(coordinate) ==
+               (legacyDensity.densityAt(coordinate) > 0.0),
+           "legacy density mode retains the original solidity rule");
   }
-  expect(foundMultipleTransitions, "4D density terrain supports multiple "
-                                   "solid/air transitions on one y line");
+  const int densitySurface = legacyDensity.surfaceHeightAt(0, 0, 0);
+  expect(legacyDensity.generatedSolidAt({0, densitySurface, 0, 0}),
+         "legacy density mode retains its surface search");
+  expect(!legacyDensity.generatedSolidAt({0, densitySurface + 1, 0, 0}),
+         "legacy density surface search still returns the highest solid block");
+
+  constexpr std::array<proj4d::BlockCoord, 4> horizontalSamples{{
+      {0, 0, 0, 0},
+      {1000000, 0, -1000000, 500000},
+      {-2000000, 0, 3000000, -4000000},
+      {15, 0, 16, -17},
+  }};
+  for (const proj4d::BlockCoord &surface : horizontalSamples) {
+    expect(first.surfaceHeightAt(surface.x, surface.z, surface.w) ==
+               proj4d::flatGroundSurfaceY,
+           "flat terrain has the same surface across x, z, and w");
+    expect(first.generatedSolidAt(surface),
+           "the flat ground surface is solid everywhere");
+    proj4d::BlockCoord above = surface;
+    ++above.y;
+    expect(!first.generatedSolidAt(above),
+           "the block immediately above flat ground is air everywhere");
+    proj4d::BlockCoord below = surface;
+    below.y = -1000000;
+    expect(first.generatedSolidAt(below),
+           "flat terrain remains solid infinitely deep");
+    expect(first.generatedSolidAt(surface) ==
+               different.generatedSolidAt(surface),
+           "active flat terrain is independent of the retained density seed");
+  }
+
+  const proj4d::Chunk surfaceChunk = first.generateChunk({7, 0, -9, 11});
+  expect(surfaceChunk.isSolid({0, 0, 0, 0}),
+         "surface chunks contain their y=0 ground layer");
+  expect(!surfaceChunk.isSolid({0, 1, 0, 0}),
+         "surface chunks contain air above the ground layer");
+  const proj4d::Chunk deepChunk = first.generateChunk({-12, -5000, 34, -56});
+  expect(deepChunk.isSolid({15, 15, 15, 15}),
+         "arbitrarily deep chunks are completely solid");
+  const proj4d::Chunk skyChunk = first.generateChunk({99, 5000, -88, 77});
+  expect(!skyChunk.isSolid({0, 0, 0, 0}),
+         "arbitrarily high chunks are completely air");
+
+  proj4d::BlockWorld flatWorld(12345U);
+  expect(proj4d::buildFeatureEdges(flatWorld, {0, 2, 0, 0}, 4).size() == 12U,
+         "smooth flat terrain retains only a bounded outer wireframe guide");
 }
 
 void testInfiniteWorldCacheAndEdits() {
@@ -411,7 +444,7 @@ void testVisionGeometryIsBounded() {
   camera.turnVertical(-0.28);
   const proj4d::BlockCoord center = proj4d::containingBlock(camera.position);
   const auto lines = proj4d::buildVisionGeometry(world, camera, center, 4);
-  expect(!lines.empty(), "procedural 4D terrain produces wireframe geometry");
+  expect(!lines.empty(), "flat 4D terrain produces bounded wireframe geometry");
   for (const auto &line : lines) {
     for (std::size_t axis = 0; axis < 3; ++axis) {
       expect(line.from[axis] >= -1.000001 && line.from[axis] <= 1.000001 &&
@@ -436,7 +469,7 @@ int main() {
     testPlayerSlidesAlongBlockedFaces();
     testPlayerJumpsOneAndAHalfBlocks();
     testTrueFourDimensionalChunks();
-    testProceduralDensityField();
+    testFlatTerrainAndPreservedDensityFunctions();
     testInfiniteWorldCacheAndEdits();
     testOccludedFacesAndSmoothEdgesAreCulled();
     testTerrainOccludesUndergroundCavities();

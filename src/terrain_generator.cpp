@@ -41,9 +41,12 @@ double latticeValue(int x, int y, int z, int w, std::uint32_t seed) {
 
 } // namespace
 
-TerrainGenerator::TerrainGenerator(std::uint32_t seed) : seed_(seed) {}
+TerrainGenerator::TerrainGenerator(std::uint32_t seed, TerrainMode mode)
+    : seed_(seed), mode_(mode) {}
 
 std::uint32_t TerrainGenerator::seed() const { return seed_; }
+
+TerrainMode TerrainGenerator::mode() const { return mode_; }
 
 double TerrainGenerator::valueNoise4D(double x, double y, double z, double w,
                                       std::uint32_t salt) const {
@@ -115,10 +118,16 @@ double TerrainGenerator::densityAt(const BlockCoord &coordinate) const {
 }
 
 bool TerrainGenerator::generatedSolidAt(const BlockCoord &coordinate) const {
-  return densityAt(coordinate) > 0.0;
+  if (mode_ == TerrainMode::Density) {
+    return densityAt(coordinate) > 0.0;
+  }
+  return coordinate.y <= flatGroundSurfaceY;
 }
 
 int TerrainGenerator::surfaceHeightAt(int x, int z, int w) const {
+  if (mode_ == TerrainMode::Flat) {
+    return flatGroundSurfaceY;
+  }
   constexpr int maximumSurfaceSearch = 96;
   constexpr int minimumSurfaceSearch = -96;
   for (int y = maximumSurfaceSearch; y >= minimumSurfaceSearch; --y) {
