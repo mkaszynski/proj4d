@@ -40,10 +40,10 @@ Apply these invariants to every change in the Proj4D repository.
   and fourth-dimensional horizontal.
 - Map unmodified horizontal mouse motion to ordinary horizontal world look and
   vertical mouse motion to fourth-dimensional world look. While either Shift
-  key is held, use vertical mouse motion for vertical world look instead. While
-  either Ctrl key is held, preserve mouse motion as the external orbit control
-  for the projected 3D vision cube instead of changing world look; Ctrl takes
-  priority over Shift.
+  key is held, use vertical mouse motion exclusively for vertical world look
+  and ignore horizontal mouse motion. While either Ctrl key is held, preserve
+  mouse motion as the external orbit control for the projected 3D vision cube
+  instead of changing world look; Ctrl takes priority over Shift.
 - Use `W/S` for forward/backward movement and `A/D` plus `Q/E` for two mutually
   perpendicular level strafing directions. Keep all three directions mutually
   orthogonal and remove keyboard look rotation from `A/D` and `Q/E`.

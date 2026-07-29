@@ -74,7 +74,7 @@ choice with the mouse.
 | `Up` / `Down` | Look up or down, stopping at straight up or straight down |
 | Mouse left / right | Ordinary horizontal look in the 4D world |
 | Mouse up / down | Fourth-dimensional look |
-| Hold `Shift` + mouse movement | Use mouse up/down for vertical look while retaining horizontal look |
+| Hold `Shift` + mouse movement | Use mouse up/down for vertical look; mouse left/right is ignored |
 | Hold `Ctrl` + mouse movement | Orbit the solid 3D vision cube without changing the 4D view direction |
 | Mouse wheel | Zoom the external view of the vision cube |
 | Left mouse button | Break the targeted tesseract |

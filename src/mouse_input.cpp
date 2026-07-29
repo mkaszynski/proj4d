@@ -20,7 +20,7 @@ MouseMotionMapping mapMouseMotion(double horizontalPixels,
     return {0.0, 0.0, 0.0, horizontalTurn, verticalTurn};
   }
   if (mode == MouseMotionMode::VerticalLook) {
-    return {horizontalTurn, -verticalTurn, 0.0, 0.0, 0.0};
+    return {0.0, -verticalTurn, 0.0, 0.0, 0.0};
   }
   return {horizontalTurn, 0.0, verticalTurn, 0.0, 0.0};
 }

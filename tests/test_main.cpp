@@ -148,12 +148,12 @@ void testMouseMovementTurnsInOrdinaryAndFourthDimensions() {
   shiftedCamera.turnHorizontal(shiftMotion.worldHorizontalTurn);
   shiftedCamera.turnVertical(shiftMotion.worldVerticalTurn);
   shiftedCamera.turnFourth(shiftMotion.worldFourthTurn);
-  expect(proj4d::nearlyEqual(shiftedCamera.horizontalAngle(), 0.1, 1.0e-8),
-         "Shift plus horizontal mouse movement retains ordinary world look");
+  expect(proj4d::nearlyEqual(shiftedCamera.horizontalAngle(), 0.0),
+         "Shift plus horizontal mouse movement cannot turn sideways");
   expect(proj4d::nearlyEqual(shiftedCamera.verticalPitch(), 0.2, 1.0e-8),
          "Shift plus upward mouse movement looks upward");
   expect(proj4d::nearlyEqual(shiftedCamera.fourthAngle(), 0.0),
-         "Shift replaces fourth-dimensional mouse Y with vertical look");
+         "Shift allows only vertical world look");
   expect(proj4d::selectMouseMotionMode(true, true) ==
              proj4d::MouseMotionMode::VisionCubeOrbit,
          "Ctrl takes priority over Shift for mouse control");
