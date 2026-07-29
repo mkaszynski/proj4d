@@ -15,6 +15,7 @@
 #include "proj4d/camera.hpp"
 #include "proj4d/player_motion.hpp"
 #include "proj4d/render_geometry.hpp"
+#include "proj4d/view_status.hpp"
 #include "proj4d/world.hpp"
 
 namespace proj4d {
@@ -121,6 +122,91 @@ void drawCrosshair(SDL_Renderer *renderer, const DisplayCamera &display,
   }
 }
 
+std::array<std::uint8_t, 7> glyphRows(char character) {
+  switch (character) {
+  case '0':
+    return {14, 17, 19, 21, 25, 17, 14};
+  case '1':
+    return {4, 12, 4, 4, 4, 4, 14};
+  case '2':
+    return {14, 17, 1, 2, 4, 8, 31};
+  case '3':
+    return {30, 1, 1, 14, 1, 1, 30};
+  case '4':
+    return {2, 6, 10, 18, 31, 2, 2};
+  case '5':
+    return {31, 16, 16, 30, 1, 1, 30};
+  case '6':
+    return {14, 16, 16, 30, 17, 17, 14};
+  case '7':
+    return {31, 1, 2, 4, 8, 8, 8};
+  case '8':
+    return {14, 17, 17, 14, 17, 17, 14};
+  case '9':
+    return {14, 17, 17, 15, 1, 1, 14};
+  case 'D':
+    return {30, 17, 17, 17, 17, 17, 30};
+  case 'H':
+    return {17, 17, 17, 31, 17, 17, 17};
+  case 'V':
+    return {17, 17, 17, 17, 17, 10, 4};
+  case 'W':
+    return {17, 17, 17, 21, 21, 21, 10};
+  case 'X':
+    return {17, 17, 10, 4, 10, 17, 17};
+  case 'Y':
+    return {17, 17, 10, 4, 4, 4, 4};
+  case 'Z':
+    return {31, 1, 2, 4, 8, 16, 31};
+  case ':':
+    return {0, 4, 4, 0, 4, 4, 0};
+  case '.':
+    return {0, 0, 0, 0, 0, 4, 4};
+  case '-':
+    return {0, 0, 0, 31, 0, 0, 0};
+  case '|':
+    return {4, 4, 4, 4, 4, 4, 4};
+  default:
+    return {};
+  }
+}
+
+void drawBitmapText(SDL_Renderer *renderer, const std::string &text, int x,
+                    int y, int scale) {
+  SDL_SetRenderDrawColor(renderer, 224, 236, 248, 255);
+  for (const char character : text) {
+    const auto rows = glyphRows(character);
+    for (int row = 0; row < 7; ++row) {
+      for (int column = 0; column < 5; ++column) {
+        if ((rows[static_cast<std::size_t>(row)] &
+             (1U << static_cast<unsigned int>(4 - column))) == 0U) {
+          continue;
+        }
+        const SDL_Rect pixel{
+            x + column * scale,
+            y + row * scale,
+            scale,
+            scale,
+        };
+        SDL_RenderFillRect(renderer, &pixel);
+      }
+    }
+    x += 6 * scale;
+  }
+}
+
+void drawStatusBar(SDL_Renderer *renderer, const Camera4D &camera, int width) {
+  const int scale = width >= 820 ? 2 : 1;
+  const int barHeight = 9 * scale + 4;
+  const SDL_Rect bar{0, 0, width, barHeight};
+  SDL_SetRenderDrawColor(renderer, 9, 15, 24, 255);
+  SDL_RenderFillRect(renderer, &bar);
+  SDL_SetRenderDrawColor(renderer, 55, 78, 102, 255);
+  SDL_RenderDrawLine(renderer, 0, barHeight - 1, width, barHeight - 1);
+  drawBitmapText(renderer, formatViewStatus(camera), 4 * scale, 2 * scale,
+                 scale);
+}
+
 void render(SDL_Renderer *renderer, const BlockWorld &world,
             const Camera4D &camera, const DisplayCamera &display, int width,
             int height, FeatureGeometryCache &geometryCache) {
@@ -153,6 +239,7 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
     }
   }
   drawCrosshair(renderer, display, width, height);
+  drawStatusBar(renderer, camera, width);
   SDL_RenderPresent(renderer);
 }
 

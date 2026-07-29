@@ -20,6 +20,7 @@ add_library(proj4d_core
     src/player_motion.cpp
     src/render_geometry.cpp
     src/terrain_generator.cpp
+    src/view_status.cpp
     src/world.cpp
 )
 target_include_directories(proj4d_core PUBLIC include)

@@ -69,6 +69,9 @@ bitmap of the rendered vision cube:
 
 The red, green, and blue arms at the center form the 3D crosshair. Boundary
 wireframes are tinted by which of the four world axes their cubic cell faces.
+The top status bar shows live `X`, `Y`, `Z`, and `W` coordinates plus ordinary
+horizontal (`H`), vertical (`V`), and fourth-dimensional (`4D`) view angles in
+degrees.
 
 ## Architecture
 

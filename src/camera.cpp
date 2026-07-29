@@ -56,4 +56,13 @@ Vec4 Camera4D::flattenedForward() const { return horizontalForward_; }
 
 double Camera4D::verticalPitch() const { return verticalPitch_; }
 
+double Camera4D::horizontalAngle() const {
+  return std::atan2(horizontalForward_.x, horizontalForward_.z);
+}
+
+double Camera4D::fourthAngle() const {
+  return std::atan2(horizontalForward_.w,
+                    std::hypot(horizontalForward_.x, horizontalForward_.z));
+}
+
 } // namespace proj4d

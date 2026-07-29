@@ -29,7 +29,9 @@ public:
   void turnFourth(double radians);
   [[nodiscard]] std::optional<ProjectedPoint> project(const Vec4 &point) const;
   [[nodiscard]] Vec4 flattenedForward() const;
+  [[nodiscard]] double horizontalAngle() const;
   [[nodiscard]] double verticalPitch() const;
+  [[nodiscard]] double fourthAngle() const;
 
 private:
   void rotateHorizontalPlane(Vec4 &imageAxis, double radians);

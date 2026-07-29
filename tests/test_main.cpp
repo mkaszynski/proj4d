@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -10,6 +11,7 @@
 #include "proj4d/player_motion.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/terrain_generator.hpp"
+#include "proj4d/view_status.hpp"
 #include "proj4d/world.hpp"
 
 namespace {
@@ -108,6 +110,38 @@ void testHorizontalLookKeepsTheViewLevel() {
          "left and right look follow a level circle");
   expect(proj4d::nearlyEqual(camera.imageX.y, 0.0),
          "left and right look do not roll or tilt the horizon");
+}
+
+void testViewStatusReportsFourCoordinatesAndThreeAngles() {
+  proj4d::Camera4D camera;
+  camera.position = {-12.25, 3.5, 42.0, 0.75};
+  camera.turnHorizontal(0.5);
+  camera.turnVertical(-0.25);
+  camera.turnFourth(0.75);
+
+  expect(proj4d::nearlyEqual(camera.horizontalAngle(), 0.5),
+         "camera reports its ordinary horizontal angle");
+  expect(proj4d::nearlyEqual(camera.verticalPitch(), -0.25),
+         "camera reports its vertical angle");
+  expect(proj4d::nearlyEqual(camera.fourthAngle(), 0.75),
+         "camera reports its fourth-dimensional angle");
+  const double horizontal = camera.horizontalAngle();
+  const double fourth = camera.fourthAngle();
+  const proj4d::Vec4 reconstructedForward{
+      std::cos(fourth) * std::sin(horizontal),
+      0.0,
+      std::cos(fourth) * std::cos(horizontal),
+      std::sin(fourth),
+  };
+  const proj4d::Vec4 actualForward = camera.flattenedForward();
+  for (std::size_t axis = 0; axis < 4; ++axis) {
+    expect(proj4d::nearlyEqual(reconstructedForward[axis], actualForward[axis],
+                               1.0e-8),
+           "reported angles reconstruct the actual horizontal view");
+  }
+  expect(proj4d::formatViewStatus(camera) ==
+             "X:-12.25 Y:3.50 Z:42.00 W:0.75 | H:28.6 V:-14.3 4D:43.0",
+         "HUD status formats four coordinates and three angles in degrees");
 }
 
 void testGroundedPlayerCanMoveWithoutJumping() {
@@ -397,6 +431,7 @@ int main() {
     testCameraProjectionAndRotation();
     testVerticalLookStopsAtStraightUpAndDown();
     testHorizontalLookKeepsTheViewLevel();
+    testViewStatusReportsFourCoordinatesAndThreeAngles();
     testGroundedPlayerCanMoveWithoutJumping();
     testPlayerSlidesAlongBlockedFaces();
     testPlayerJumpsOneAndAHalfBlocks();
