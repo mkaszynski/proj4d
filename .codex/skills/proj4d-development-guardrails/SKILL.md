@@ -38,6 +38,11 @@ Apply these invariants to every change in the Proj4D repository.
   deciding that a face is exposed.
 - Keep the three independent look rotations: vertical, ordinary horizontal,
   and fourth-dimensional horizontal.
+- Keep terrestrial player motion synchronized with Hypercraft's authoritative
+  baseline: 7-block-per-second walking, gravity 36, a 1.5-block jump setting,
+  0.15-block body radius on `x`, `z`, and `w`, 1.65 eye-to-feet and 0.18
+  eye-to-head bounds, a 50-millisecond delta cap, 0.25-block collision
+  substeps, and axis-separated 4D wall sliding.
 
 ## Keep Ownership Clear
 

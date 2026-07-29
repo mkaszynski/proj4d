@@ -82,7 +82,10 @@ The red, green, and blue arms at the center form the 3D crosshair. Boundary
 wireframes are tinted by which of the four world axes their cubic cell faces.
 The top status bar shows live `X`, `Y`, `Z`, and `W` coordinates plus ordinary
 horizontal (`H`), vertical (`V`), and fourth-dimensional (`4D`) view angles in
-degrees.
+degrees. Ground movement and jumping use Hypercraft's terrestrial player
+physics: a 7-block-per-second walk, 36-block-per-second-squared gravity, a
+1.5-block jump setting, a 0.3-block-wide 4D collision body, collision substeps,
+and axis-separated wall sliding.
 
 ## Architecture
 
@@ -94,6 +97,9 @@ degrees.
   space.
 - `Camera4D` owns an orthonormal four-axis camera frame and performs true
   4D-to-3D perspective projection with level yaw and bounded vertical pitch.
+- Player motion uses Hypercraft's authoritative terrestrial constants,
+  collision bounds, 50-millisecond frame clamp, substeps, grounding, and
+  axis-separated collision response, extended across `x`, `z`, and `w`.
 - View-dependent sightline culling prevents nearer solid terrain from exposing
   wireframes belonging to hidden player-made cavities.
 - `buildVisionGeometry` examines a fixed local 4D region, rejects cubic faces

@@ -566,19 +566,11 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
         } else if (event.button.button == SDL_BUTTON_RIGHT) {
           const std::array<BlockCoord, 2> protectedBlocks{{
               containingBlock(camera.position),
-              containingBlock({
-                  camera.position.x,
-                  camera.position.y - playerEyeHeight + playerCollisionInset,
-                  camera.position.z,
-                  camera.position.w,
-              }),
+              playerLowerBodyBlock(camera.position),
           }};
           static_cast<void>(buildAlongRay(
               world, camera.position, camera.forward, 8.0, protectedBlocks));
         }
-      } else if (event.type == SDL_KEYDOWN &&
-                 event.key.keysym.sym == SDLK_SPACE) {
-        requestPlayerJump(playerMotion);
       }
     }
 
@@ -595,7 +587,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
     camera.turnFourth(((keys[SDL_SCANCODE_E] != 0 ? 1.0 : 0.0) -
                        (keys[SDL_SCANCODE_Q] != 0 ? 1.0 : 0.0)) *
                       turnSpeed * deltaSeconds);
-    updatePlayerMotion(camera, world, playerMotion, movement, deltaSeconds);
+    updatePlayerMotion(camera, world, playerMotion, movement,
+                       keys[SDL_SCANCODE_SPACE] != 0, deltaSeconds);
 
     int width = initialWidth;
     int height = initialHeight;

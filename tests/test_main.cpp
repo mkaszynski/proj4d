@@ -171,12 +171,54 @@ void testGroundedPlayerCanMoveWithoutJumping() {
   expect(proj4d::playerCanOccupy(world, camera.position),
          "grounded player position is not mistaken for a collision");
 
-  proj4d::updatePlayerMotion(camera, world, motion, 1.0, 0.1);
+  proj4d::updatePlayerMotion(camera, world, motion, 1.0, false, 0.1);
   expect(camera.position.z > spawnPosition.z,
          "grounded player moves forward without jumping");
   expect(motion.grounded, "player remains grounded after horizontal movement");
   expect(proj4d::nearlyEqual(camera.position.y, spawnPosition.y),
          "ground contact preserves standing eye height");
+}
+
+void testPlayerPhysicsMatchesHypercraft() {
+  expect(proj4d::nearlyEqual(proj4d::playerWalkSpeed, 7.0),
+         "walking speed matches Hypercraft");
+  expect(proj4d::nearlyEqual(proj4d::playerGravity, 36.0),
+         "gravity matches Hypercraft");
+  expect(proj4d::nearlyEqual(proj4d::playerJumpHeight, 1.5),
+         "configured jump height matches Hypercraft");
+  expect(proj4d::nearlyEqual(proj4d::playerCollisionBounds.radius * 2.0, 0.3),
+         "the player is 0.3 blocks wide on x, z, and w like Hypercraft");
+  expect(proj4d::nearlyEqual(proj4d::playerCollisionBounds.eyeToFeet, 1.65),
+         "eye-to-feet collision height matches Hypercraft");
+  expect(proj4d::nearlyEqual(proj4d::playerCollisionBounds.eyeToHead, 0.18),
+         "eye-to-head collision height matches Hypercraft");
+
+  proj4d::BlockWorld flatWorld(proj4d::TerrainMode::Flat, 2026U);
+  proj4d::Camera4D camera;
+  camera.position = {0.5, 1.0 + proj4d::playerEyeHeight, 0.5, 0.5};
+  const proj4d::Vec4 start = camera.position;
+  proj4d::PlayerMotionState motion{0.0, true, start};
+  for (int frame = 0; frame < 60; ++frame) {
+    proj4d::updatePlayerMotion(camera, flatWorld, motion, 1.0, false,
+                               1.0 / 60.0);
+  }
+  expect(proj4d::nearlyEqual(camera.position.z - start.z, 7.0, 1.0e-8),
+         "one second of forward input travels seven blocks like Hypercraft");
+
+  proj4d::Camera4D clampedCamera;
+  clampedCamera.position = start;
+  proj4d::PlayerMotionState clampedMotion{0.0, true, start};
+  proj4d::updatePlayerMotion(clampedCamera, flatWorld, clampedMotion, 1.0,
+                             false, 1.0);
+  expect(proj4d::nearlyEqual(clampedCamera.position.z - start.z, 0.35, 1.0e-8),
+         "a long frame uses Hypercraft's 50 millisecond physics cap");
+
+  proj4d::BlockWorld collisionWorld(proj4d::TerrainMode::Flat, 2027U);
+  static_cast<void>(collisionWorld.setSolid({0, 100, 0, 1}, true));
+  expect(!proj4d::playerCollidesAt(collisionWorld, {0.5, 100.5, 0.5, 0.84}),
+         "the narrow 4D body can approach a neighboring w block");
+  expect(proj4d::playerCollidesAt(collisionWorld, {0.5, 100.5, 0.5, 0.86}),
+         "the 4D body collides after its radius reaches a neighboring w block");
 }
 
 void testPlayerSlidesAlongBlockedFaces() {
@@ -201,7 +243,7 @@ void testPlayerSlidesAlongBlockedFaces() {
   const proj4d::Vec4 spawnPosition = camera.position;
   proj4d::PlayerMotionState motion{0.0, true, spawnPosition};
 
-  proj4d::updatePlayerMotion(camera, world, motion, 1.0, 0.2);
+  proj4d::updatePlayerMotion(camera, world, motion, 1.0, false, 0.2);
   expect(proj4d::nearlyEqual(camera.position.x, spawnPosition.x),
          "blocked movement component stops at the wall");
   expect(camera.position.z > spawnPosition.z,
@@ -225,19 +267,26 @@ void testPlayerJumpsOneAndAHalfBlocks() {
   };
   const proj4d::Vec4 spawnPosition = camera.position;
   proj4d::PlayerMotionState motion{0.0, true, spawnPosition};
-  proj4d::requestPlayerJump(motion);
 
   double maximumEyeY = camera.position.y;
-  for (int step = 0; step < 240 && !motion.grounded; ++step) {
-    proj4d::updatePlayerMotion(camera, world, motion, 0.0, 1.0 / 120.0);
+  proj4d::updatePlayerMotion(camera, world, motion, 0.0, true, 1.0 / 120.0);
+  expect(proj4d::nearlyEqual(
+             motion.verticalVelocity,
+             std::sqrt(2.0 * proj4d::playerGravity * proj4d::playerJumpHeight) -
+                 proj4d::playerGravity / 120.0,
+             1.0e-8),
+         "jump launch velocity and first gravity step match Hypercraft");
+  maximumEyeY = std::max(maximumEyeY, camera.position.y);
+  for (int step = 1; step < 240 && !motion.grounded; ++step) {
+    proj4d::updatePlayerMotion(camera, world, motion, 0.0, false, 1.0 / 120.0);
     maximumEyeY = std::max(maximumEyeY, camera.position.y);
   }
   expect(proj4d::nearlyEqual(maximumEyeY - spawnPosition.y,
-                             proj4d::playerJumpHeight, 1.0e-3),
-         "jump rises one and a half blocks");
+                             proj4d::playerJumpHeight, 0.16),
+         "jump apex follows Hypercraft's 1.5-block jump configuration");
   expect(motion.grounded, "jump finishes by landing on the ground");
-  expect(proj4d::nearlyEqual(camera.position.y, spawnPosition.y),
-         "landing restores the standing eye height");
+  expect(proj4d::nearlyEqual(camera.position.y, spawnPosition.y, 0.04),
+         "landing returns within Hypercraft's ground-contact probe");
 }
 
 void testTrueFourDimensionalChunks() {
@@ -495,6 +544,7 @@ int main() {
     testHorizontalLookKeepsTheViewLevel();
     testViewStatusReportsFourCoordinatesAndThreeAngles();
     testGroundedPlayerCanMoveWithoutJumping();
+    testPlayerPhysicsMatchesHypercraft();
     testPlayerSlidesAlongBlockedFaces();
     testPlayerJumpsOneAndAHalfBlocks();
     testTrueFourDimensionalChunks();

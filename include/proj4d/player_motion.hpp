@@ -5,8 +5,16 @@
 
 namespace proj4d {
 
-inline constexpr double playerEyeHeight = 1.1;
-inline constexpr double playerCollisionInset = 0.02;
+struct PlayerCollisionBounds {
+  double radius{0.15};
+  double eyeToFeet{1.65};
+  double eyeToHead{0.18};
+};
+
+inline constexpr PlayerCollisionBounds playerCollisionBounds{};
+inline constexpr double playerEyeHeight = playerCollisionBounds.eyeToFeet;
+inline constexpr double playerWalkSpeed = 7.0;
+inline constexpr double playerGravity = 36.0;
 inline constexpr double playerJumpHeight = 1.5;
 
 struct PlayerMotionState {
@@ -16,11 +24,17 @@ struct PlayerMotionState {
 };
 
 [[nodiscard]] BlockCoord playerLowerBodyBlock(const Vec4 &eyePosition);
+[[nodiscard]] bool
+playerCollidesAt(const BlockWorld &world, const Vec4 &eyePosition,
+                 PlayerCollisionBounds bounds = playerCollisionBounds);
 [[nodiscard]] bool playerCanOccupy(const BlockWorld &world,
                                    const Vec4 &eyePosition);
-void requestPlayerJump(PlayerMotionState &state);
+[[nodiscard]] Vec4
+resolvePlayerMotion(const BlockWorld &world, const Vec4 &eyePosition,
+                    const Vec4 &desiredMotion,
+                    PlayerCollisionBounds bounds = playerCollisionBounds);
 void updatePlayerMotion(Camera4D &camera, const BlockWorld &world,
                         PlayerMotionState &state, double moveInput,
-                        double deltaSeconds);
+                        bool jumpInput, double deltaSeconds);
 
 } // namespace proj4d
