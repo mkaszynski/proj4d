@@ -100,11 +100,15 @@ Vec4 resolvePlayerMotion(const BlockWorld &world, const Vec4 &eyePosition,
 }
 
 void updatePlayerMotion(Camera4D &camera, const BlockWorld &world,
-                        PlayerMotionState &state, double moveInput,
+                        PlayerMotionState &state, PlayerMoveInput moveInput,
                         bool jumpInput, double deltaSeconds) {
   deltaSeconds = std::clamp(deltaSeconds, 0.0, maximumDeltaSeconds);
+  const Vec4 requestedDirection =
+      camera.flattenedForward() * moveInput.forward +
+      camera.ordinarySideways() * moveInput.ordinaryStrafe +
+      camera.fourthSideways() * moveInput.fourthStrafe;
   const Vec4 planarMotion =
-      camera.flattenedForward() * (moveInput * playerWalkSpeed * deltaSeconds);
+      requestedDirection * (playerWalkSpeed * deltaSeconds);
   const double maximumMotion = std::max(
       {std::abs(planarMotion.x), std::abs(planarMotion.z),
        std::abs(planarMotion.w),

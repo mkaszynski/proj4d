@@ -29,6 +29,8 @@ public:
   void turnFourth(double radians);
   [[nodiscard]] std::optional<ProjectedPoint> project(const Vec4 &point) const;
   [[nodiscard]] Vec4 flattenedForward() const;
+  [[nodiscard]] Vec4 ordinarySideways() const;
+  [[nodiscard]] Vec4 fourthSideways() const;
   [[nodiscard]] double horizontalAngle() const;
   [[nodiscard]] double verticalPitch() const;
   [[nodiscard]] double fourthAngle() const;

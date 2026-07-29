@@ -23,6 +23,12 @@ struct PlayerMotionState {
   Vec4 spawnPosition{};
 };
 
+struct PlayerMoveInput {
+  double forward{};
+  double ordinaryStrafe{};
+  double fourthStrafe{};
+};
+
 [[nodiscard]] BlockCoord playerLowerBodyBlock(const Vec4 &eyePosition);
 [[nodiscard]] bool
 playerCollidesAt(const BlockWorld &world, const Vec4 &eyePosition,
@@ -34,7 +40,7 @@ resolvePlayerMotion(const BlockWorld &world, const Vec4 &eyePosition,
                     const Vec4 &desiredMotion,
                     PlayerCollisionBounds bounds = playerCollisionBounds);
 void updatePlayerMotion(Camera4D &camera, const BlockWorld &world,
-                        PlayerMotionState &state, double moveInput,
+                        PlayerMotionState &state, PlayerMoveInput moveInput,
                         bool jumpInput, double deltaSeconds);
 
 } // namespace proj4d

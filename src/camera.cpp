@@ -54,6 +54,10 @@ std::optional<ProjectedPoint> Camera4D::project(const Vec4 &point) const {
 
 Vec4 Camera4D::flattenedForward() const { return horizontalForward_; }
 
+Vec4 Camera4D::ordinarySideways() const { return imageX; }
+
+Vec4 Camera4D::fourthSideways() const { return imageZ; }
+
 double Camera4D::verticalPitch() const { return verticalPitch_; }
 
 double Camera4D::horizontalAngle() const {

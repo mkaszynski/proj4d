@@ -114,31 +114,74 @@ void testHorizontalLookKeepsTheViewLevel() {
 }
 
 void testMouseMovementTurnsInOrdinaryAndFourthDimensions() {
-  const proj4d::MouseMotionMapping worldMotion =
-      proj4d::mapMouseMotion(25.0, -50.0, false);
+  const proj4d::MouseMotionMapping worldMotion = proj4d::mapMouseMotion(
+      25.0, -50.0, proj4d::MouseMotionMode::FourthDimensionalLook);
   proj4d::Camera4D camera;
   camera.turnHorizontal(worldMotion.worldHorizontalTurn);
+  camera.turnVertical(worldMotion.worldVerticalTurn);
   camera.turnFourth(worldMotion.worldFourthTurn);
 
   expect(proj4d::nearlyEqual(camera.horizontalAngle(), 0.1, 1.0e-8),
-         "rightward mouse movement turns in the same direction as D");
+         "rightward mouse movement turns ordinary horizontal look");
   expect(proj4d::nearlyEqual(camera.fourthAngle(), -0.2, 1.0e-8),
-         "upward mouse movement turns in the same direction as Q");
+         "upward mouse movement turns fourth-dimensional look");
   expect(proj4d::nearlyEqual(camera.verticalPitch(), 0.0),
          "ordinary mouse look does not change vertical pitch");
   expect(proj4d::nearlyEqual(worldMotion.visionCubeYawTurn, 0.0) &&
              proj4d::nearlyEqual(worldMotion.visionCubePitchTurn, 0.0),
          "unmodified mouse movement does not orbit the vision cube");
 
-  const proj4d::MouseMotionMapping controlMotion =
-      proj4d::mapMouseMotion(25.0, -50.0, true);
+  const proj4d::MouseMotionMapping controlMotion = proj4d::mapMouseMotion(
+      25.0, -50.0, proj4d::MouseMotionMode::VisionCubeOrbit);
   expect(proj4d::nearlyEqual(controlMotion.worldHorizontalTurn, 0.0) &&
+             proj4d::nearlyEqual(controlMotion.worldVerticalTurn, 0.0) &&
              proj4d::nearlyEqual(controlMotion.worldFourthTurn, 0.0),
          "Ctrl plus mouse leaves the 4D world look unchanged");
   expect(
       proj4d::nearlyEqual(controlMotion.visionCubeYawTurn, 0.1, 1.0e-8) &&
           proj4d::nearlyEqual(controlMotion.visionCubePitchTurn, -0.2, 1.0e-8),
       "Ctrl plus mouse retains the original vision-cube orbit");
+
+  const proj4d::MouseMotionMapping shiftMotion = proj4d::mapMouseMotion(
+      25.0, -50.0, proj4d::MouseMotionMode::VerticalLook);
+  proj4d::Camera4D shiftedCamera;
+  shiftedCamera.turnHorizontal(shiftMotion.worldHorizontalTurn);
+  shiftedCamera.turnVertical(shiftMotion.worldVerticalTurn);
+  shiftedCamera.turnFourth(shiftMotion.worldFourthTurn);
+  expect(proj4d::nearlyEqual(shiftedCamera.horizontalAngle(), 0.1, 1.0e-8),
+         "Shift plus horizontal mouse movement retains ordinary world look");
+  expect(proj4d::nearlyEqual(shiftedCamera.verticalPitch(), 0.2, 1.0e-8),
+         "Shift plus upward mouse movement looks upward");
+  expect(proj4d::nearlyEqual(shiftedCamera.fourthAngle(), 0.0),
+         "Shift replaces fourth-dimensional mouse Y with vertical look");
+  expect(proj4d::selectMouseMotionMode(true, true) ==
+             proj4d::MouseMotionMode::VisionCubeOrbit,
+         "Ctrl takes priority over Shift for mouse control");
+}
+
+void testCameraProvidesTwoOrthogonalSidewaysDirections() {
+  proj4d::Camera4D camera;
+  camera.turnHorizontal(0.47);
+  camera.turnFourth(-0.31);
+  camera.turnVertical(0.62);
+
+  const proj4d::Vec4 forward = camera.flattenedForward();
+  const proj4d::Vec4 ordinarySideways = camera.ordinarySideways();
+  const proj4d::Vec4 fourthSideways = camera.fourthSideways();
+  expect(proj4d::nearlyEqual(proj4d::length(ordinarySideways), 1.0, 1.0e-8) &&
+             proj4d::nearlyEqual(proj4d::length(fourthSideways), 1.0, 1.0e-8),
+         "both sideways movement directions remain normalized");
+  expect(proj4d::nearlyEqual(proj4d::dot(forward, ordinarySideways), 0.0,
+                             1.0e-8) &&
+             proj4d::nearlyEqual(proj4d::dot(forward, fourthSideways), 0.0,
+                                 1.0e-8),
+         "both sideways directions remain perpendicular to W/S movement");
+  expect(proj4d::nearlyEqual(proj4d::dot(ordinarySideways, fourthSideways), 0.0,
+                             1.0e-8),
+         "A/D and Q/E movement directions remain perpendicular to each other");
+  expect(proj4d::nearlyEqual(ordinarySideways.y, 0.0) &&
+             proj4d::nearlyEqual(fourthSideways.y, 0.0),
+         "sideways controls remain level when the view looks up or down");
 }
 
 void testViewStatusReportsFourCoordinatesAndThreeAngles() {
@@ -200,7 +243,8 @@ void testGroundedPlayerCanMoveWithoutJumping() {
   expect(proj4d::playerCanOccupy(world, camera.position),
          "grounded player position is not mistaken for a collision");
 
-  proj4d::updatePlayerMotion(camera, world, motion, 1.0, false, 0.1);
+  proj4d::updatePlayerMotion(camera, world, motion, {1.0, 0.0, 0.0}, false,
+                             0.1);
   expect(camera.position.z > spawnPosition.z,
          "grounded player moves forward without jumping");
   expect(motion.grounded, "player remains grounded after horizontal movement");
@@ -228,8 +272,8 @@ void testPlayerPhysicsMatchesHypercraft() {
   const proj4d::Vec4 start = camera.position;
   proj4d::PlayerMotionState motion{0.0, true, start};
   for (int frame = 0; frame < 60; ++frame) {
-    proj4d::updatePlayerMotion(camera, flatWorld, motion, 1.0, false,
-                               1.0 / 60.0);
+    proj4d::updatePlayerMotion(camera, flatWorld, motion, {1.0, 0.0, 0.0},
+                               false, 1.0 / 60.0);
   }
   expect(proj4d::nearlyEqual(camera.position.z - start.z, 7.0, 1.0e-8),
          "one second of forward input travels seven blocks like Hypercraft");
@@ -237,10 +281,24 @@ void testPlayerPhysicsMatchesHypercraft() {
   proj4d::Camera4D clampedCamera;
   clampedCamera.position = start;
   proj4d::PlayerMotionState clampedMotion{0.0, true, start};
-  proj4d::updatePlayerMotion(clampedCamera, flatWorld, clampedMotion, 1.0,
-                             false, 1.0);
+  proj4d::updatePlayerMotion(clampedCamera, flatWorld, clampedMotion,
+                             {1.0, 0.0, 0.0}, false, 1.0);
   expect(proj4d::nearlyEqual(clampedCamera.position.z - start.z, 0.35, 1.0e-8),
          "a long frame uses Hypercraft's 50 millisecond physics cap");
+
+  proj4d::Camera4D strafeCamera;
+  strafeCamera.position = start;
+  proj4d::PlayerMotionState strafeMotion{0.0, true, start};
+  for (int frame = 0; frame < 60; ++frame) {
+    proj4d::updatePlayerMotion(strafeCamera, flatWorld, strafeMotion,
+                               {0.0, 1.0, 1.0}, false, 1.0 / 60.0);
+  }
+  expect(
+      proj4d::nearlyEqual(strafeCamera.position.x - start.x, 7.0, 1.0e-8) &&
+          proj4d::nearlyEqual(strafeCamera.position.w - start.w, 7.0, 1.0e-8),
+      "A/D and Q/E each use Hypercraft's seven-block movement speed");
+  expect(proj4d::nearlyEqual(strafeCamera.position.z, start.z, 1.0e-8),
+         "pure sideways input does not add forward movement");
 
   proj4d::BlockWorld collisionWorld(proj4d::TerrainMode::Flat, 2027U);
   static_cast<void>(collisionWorld.setSolid({0, 100, 0, 1}, true));
@@ -272,7 +330,8 @@ void testPlayerSlidesAlongBlockedFaces() {
   const proj4d::Vec4 spawnPosition = camera.position;
   proj4d::PlayerMotionState motion{0.0, true, spawnPosition};
 
-  proj4d::updatePlayerMotion(camera, world, motion, 1.0, false, 0.2);
+  proj4d::updatePlayerMotion(camera, world, motion, {1.0, 0.0, 0.0}, false,
+                             0.2);
   expect(proj4d::nearlyEqual(camera.position.x, spawnPosition.x),
          "blocked movement component stops at the wall");
   expect(camera.position.z > spawnPosition.z,
@@ -298,7 +357,7 @@ void testPlayerJumpsOneAndAHalfBlocks() {
   proj4d::PlayerMotionState motion{0.0, true, spawnPosition};
 
   double maximumEyeY = camera.position.y;
-  proj4d::updatePlayerMotion(camera, world, motion, 0.0, true, 1.0 / 120.0);
+  proj4d::updatePlayerMotion(camera, world, motion, {}, true, 1.0 / 120.0);
   expect(proj4d::nearlyEqual(
              motion.verticalVelocity,
              std::sqrt(2.0 * proj4d::playerGravity * proj4d::playerJumpHeight) -
@@ -307,7 +366,7 @@ void testPlayerJumpsOneAndAHalfBlocks() {
          "jump launch velocity and first gravity step match Hypercraft");
   maximumEyeY = std::max(maximumEyeY, camera.position.y);
   for (int step = 1; step < 240 && !motion.grounded; ++step) {
-    proj4d::updatePlayerMotion(camera, world, motion, 0.0, false, 1.0 / 120.0);
+    proj4d::updatePlayerMotion(camera, world, motion, {}, false, 1.0 / 120.0);
     maximumEyeY = std::max(maximumEyeY, camera.position.y);
   }
   expect(proj4d::nearlyEqual(maximumEyeY - spawnPosition.y,
@@ -572,6 +631,7 @@ int main() {
     testVerticalLookStopsAtStraightUpAndDown();
     testHorizontalLookKeepsTheViewLevel();
     testMouseMovementTurnsInOrdinaryAndFourthDimensions();
+    testCameraProvidesTwoOrthogonalSidewaysDirections();
     testViewStatusReportsFourCoordinatesAndThreeAngles();
     testGroundedPlayerCanMoveWithoutJumping();
     testPlayerPhysicsMatchesHypercraft();

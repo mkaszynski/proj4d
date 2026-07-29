@@ -68,12 +68,13 @@ choice with the mouse.
 | Input | Action |
 |---|---|
 | `W` / `S` | Move forward or backward along the current 4D viewing direction |
+| `A` / `D` | Move along the first sideways direction, perpendicular to `W` / `S` |
+| `Q` / `E` | Move along the second sideways direction, perpendicular to both other movement directions |
 | `Space` | Jump 1.5 blocks along the world's vertical axis |
-| `A` / `D` | Turn left or right |
 | `Up` / `Down` | Look up or down, stopping at straight up or straight down |
-| `Q` / `E` | Turn through the fourth spatial dimension |
-| Mouse left / right | Turn left or right in the 4D world, like `A` / `D` |
-| Mouse up / down | Turn through the fourth dimension, like `Q` / `E` |
+| Mouse left / right | Ordinary horizontal look in the 4D world |
+| Mouse up / down | Fourth-dimensional look |
+| Hold `Shift` + mouse movement | Use mouse up/down for vertical look while retaining horizontal look |
 | Hold `Ctrl` + mouse movement | Orbit the solid 3D vision cube without changing the 4D view direction |
 | Mouse wheel | Zoom the external view of the vision cube |
 | Left mouse button | Break the targeted tesseract |
@@ -102,6 +103,8 @@ and axis-separated wall sliding.
 - Player motion uses Hypercraft's authoritative terrestrial constants,
   collision bounds, 50-millisecond frame clamp, substeps, grounding, and
   axis-separated collision response, extended across `x`, `z`, and `w`.
+  `W/S`, `A/D`, and `Q/E` span three mutually perpendicular level movement
+  directions.
 - View-dependent sightline culling prevents nearer solid terrain from exposing
   wireframes belonging to hidden player-made cavities.
 - `buildVisionGeometry` examines a fixed local 4D region, rejects cubic faces

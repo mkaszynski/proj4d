@@ -39,9 +39,14 @@ Apply these invariants to every change in the Proj4D repository.
 - Keep the three independent look rotations: vertical, ordinary horizontal,
   and fourth-dimensional horizontal.
 - Map unmodified horizontal mouse motion to ordinary horizontal world look and
-  vertical mouse motion to fourth-dimensional world look. While either Ctrl
-  key is held, preserve mouse motion as the external orbit control for the
-  projected 3D vision cube instead of changing world look.
+  vertical mouse motion to fourth-dimensional world look. While either Shift
+  key is held, use vertical mouse motion for vertical world look instead. While
+  either Ctrl key is held, preserve mouse motion as the external orbit control
+  for the projected 3D vision cube instead of changing world look; Ctrl takes
+  priority over Shift.
+- Use `W/S` for forward/backward movement and `A/D` plus `Q/E` for two mutually
+  perpendicular level strafing directions. Keep all three directions mutually
+  orthogonal and remove keyboard look rotation from `A/D` and `Q/E`.
 - Keep terrestrial player motion synchronized with Hypercraft's authoritative
   baseline: 7-block-per-second walking, gravity 36, a 1.5-block jump setting,
   0.15-block body radius on `x`, `z`, and `w`, 1.65 eye-to-feet and 0.18
