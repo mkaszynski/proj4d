@@ -22,12 +22,15 @@ class BlockWorld {
 public:
   explicit BlockWorld(std::uint32_t seed = 0x4D2026U,
                       std::size_t maximumLoadedChunks = 96U);
+  explicit BlockWorld(TerrainMode terrainMode, std::uint32_t seed = 0x4D2026U,
+                      std::size_t maximumLoadedChunks = 96U);
 
   [[nodiscard]] bool isSolid(const BlockCoord &coordinate) const;
   [[nodiscard]] bool generatedSolidAt(const BlockCoord &coordinate) const;
   [[nodiscard]] bool setSolid(const BlockCoord &coordinate, bool solid);
   [[nodiscard]] int surfaceHeightAt(int x, int z, int w) const;
   [[nodiscard]] std::uint32_t seed() const;
+  [[nodiscard]] TerrainMode terrainMode() const;
   [[nodiscard]] std::size_t loadedChunkCount() const;
   [[nodiscard]] std::size_t maximumLoadedChunks() const;
   [[nodiscard]] std::uint64_t revision() const;

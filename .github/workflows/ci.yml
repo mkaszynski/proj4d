@@ -21,7 +21,13 @@ jobs:
         run: cmake --build build --parallel 2
       - name: Test
         run: ctest --test-dir build --output-on-failure
-      - name: Headless graphical smoke test
-        run: ./build/proj4d --smoke-test --smoke-output build/proj4d-smoke.bmp
-      - name: Verify smoke image
-        run: test -s build/proj4d-smoke.bmp
+      - name: Headless graphical smoke tests
+        run: |
+          ./build/proj4d --menu-smoke-test --smoke-output build/proj4d-menu.bmp
+          ./build/proj4d --smoke-test --smoke-output build/proj4d-flat.bmp
+          ./build/proj4d --normal-smoke-test --smoke-output build/proj4d-normal.bmp
+      - name: Verify smoke images
+        run: |
+          test -s build/proj4d-menu.bmp
+          test -s build/proj4d-flat.bmp
+          test -s build/proj4d-normal.bmp

@@ -8,12 +8,13 @@ slices. Instead, a native 4D perspective camera produces a solid 3D image:
 4D tesseract world -> 3D vision cube -> ordinary 2D display
 ```
 
-The active world is a four-dimensional superflat field: every block at `y <= 0`
-is solid and every block at `y > 0` is air, without limits in `x`, `z`, or `w`
-and without a lower depth limit. The original seeded four-dimensional density
-and noise functions remain in the generator for possible future terrain modes,
-and the original terrain remains selectable through `TerrainMode::Density`,
-but the game itself uses `TerrainMode::Flat`.
+At startup, a world menu offers two genuine four-dimensional terrain modes:
+
+- **Flat** is a superflat field where every block at `y <= 0` is solid and
+  every block at `y > 0` is air, without limits in `x`, `z`, or `w` and without
+  a lower depth limit.
+- **Normal** uses the original seeded four-dimensional density and noise
+  terrain from before the superflat world was introduced.
 
 The unit of generation and storage is a real `16x16x16x16` chunk containing
 65,536 tesseracts. Nearby chunks generate lazily, a bounded least-recently-used
@@ -50,14 +51,19 @@ nix-shell -p SDL2 cmake pkg-config --run \
 ./build/proj4d
 ```
 
-The deterministic graphical smoke path uses SDL's headless driver and saves a
-bitmap of the rendered vision cube:
+The deterministic graphical smoke paths use SDL's headless driver and save
+bitmaps of the menu or rendered vision cube:
 
 ```bash
+./build/proj4d --menu-smoke-test --smoke-output proj4d-menu.bmp
 ./build/proj4d --smoke-test --smoke-output proj4d-smoke.bmp
+./build/proj4d --normal-smoke-test --smoke-output proj4d-normal.bmp
 ```
 
 ## Controls
+
+In the world menu, use the arrow keys and `Enter`, press `F` or `N`, or click a
+choice with the mouse.
 
 | Input | Action |
 |---|---|
@@ -80,11 +86,12 @@ degrees.
 
 ## Architecture
 
-- `TerrainGenerator` generates the infinite superflat world and retains the
-  original deterministic 4D density terrain as an explicit optional mode.
+- `TerrainGenerator` owns both the infinite superflat and original deterministic
+  4D density modes selected by the startup menu.
 - `Chunk` stores exactly `16x16x16x16` blocks.
-- `BlockWorld` owns lazy generation, durable edit overrides, and a bounded
-  generated-chunk cache for the unbounded coordinate space.
+- `BlockWorld` owns the selected terrain mode, lazy generation, durable edit
+  overrides, and a bounded generated-chunk cache for the unbounded coordinate
+  space.
 - `Camera4D` owns an orthonormal four-axis camera frame and performs true
   4D-to-3D perspective projection with level yaw and bounded vertical pitch.
 - View-dependent sightline culling prevents nearer solid terrain from exposing

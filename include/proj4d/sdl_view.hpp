@@ -4,6 +4,13 @@
 
 namespace proj4d {
 
-int runApplication(bool smokeTest, const std::string &smokeOutput);
+enum class RunMode {
+  Interactive,
+  FlatSmokeTest,
+  NormalSmokeTest,
+  MenuSmokeTest,
+};
+
+int runApplication(RunMode mode, const std::string &smokeOutput);
 
 } // namespace proj4d

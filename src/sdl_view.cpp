@@ -144,10 +144,48 @@ std::array<std::uint8_t, 7> glyphRows(char character) {
     return {14, 17, 17, 14, 17, 17, 14};
   case '9':
     return {14, 17, 17, 15, 1, 1, 14};
+  case 'A':
+    return {14, 17, 17, 31, 17, 17, 17};
+  case 'B':
+    return {30, 17, 17, 30, 17, 17, 30};
+  case 'C':
+    return {14, 17, 16, 16, 16, 17, 14};
   case 'D':
     return {30, 17, 17, 17, 17, 17, 30};
+  case 'E':
+    return {31, 16, 16, 30, 16, 16, 31};
+  case 'F':
+    return {31, 16, 16, 30, 16, 16, 16};
+  case 'G':
+    return {14, 17, 16, 23, 17, 17, 15};
   case 'H':
     return {17, 17, 17, 31, 17, 17, 17};
+  case 'I':
+    return {14, 4, 4, 4, 4, 4, 14};
+  case 'J':
+    return {7, 2, 2, 2, 2, 18, 12};
+  case 'K':
+    return {17, 18, 20, 24, 20, 18, 17};
+  case 'L':
+    return {16, 16, 16, 16, 16, 16, 31};
+  case 'M':
+    return {17, 27, 21, 21, 17, 17, 17};
+  case 'N':
+    return {17, 25, 21, 19, 17, 17, 17};
+  case 'O':
+    return {14, 17, 17, 17, 17, 17, 14};
+  case 'P':
+    return {30, 17, 17, 30, 16, 16, 16};
+  case 'Q':
+    return {14, 17, 17, 17, 21, 18, 13};
+  case 'R':
+    return {30, 17, 17, 30, 20, 18, 17};
+  case 'S':
+    return {15, 16, 16, 14, 1, 1, 30};
+  case 'T':
+    return {31, 4, 4, 4, 4, 4, 4};
+  case 'U':
+    return {17, 17, 17, 17, 17, 17, 14};
   case 'V':
     return {17, 17, 17, 17, 17, 10, 4};
   case 'W':
@@ -172,8 +210,9 @@ std::array<std::uint8_t, 7> glyphRows(char character) {
 }
 
 void drawBitmapText(SDL_Renderer *renderer, const std::string &text, int x,
-                    int y, int scale) {
-  SDL_SetRenderDrawColor(renderer, 224, 236, 248, 255);
+                    int y, int scale,
+                    const std::array<std::uint8_t, 3> &color) {
+  SDL_SetRenderDrawColor(renderer, color[0], color[1], color[2], 255);
   for (const char character : text) {
     const auto rows = glyphRows(character);
     for (int row = 0; row < 7; ++row) {
@@ -204,7 +243,134 @@ void drawStatusBar(SDL_Renderer *renderer, const Camera4D &camera, int width) {
   SDL_SetRenderDrawColor(renderer, 55, 78, 102, 255);
   SDL_RenderDrawLine(renderer, 0, barHeight - 1, width, barHeight - 1);
   drawBitmapText(renderer, formatViewStatus(camera), 4 * scale, 2 * scale,
-                 scale);
+                 scale, {224, 236, 248});
+}
+
+void drawCenteredBitmapText(SDL_Renderer *renderer, const std::string &text,
+                            int centerX, int y, int scale,
+                            const std::array<std::uint8_t, 3> &color) {
+  const int width =
+      std::max(0, static_cast<int>(text.size()) * 6 * scale - scale);
+  drawBitmapText(renderer, text, centerX - width / 2, y, scale, color);
+}
+
+SDL_Rect terrainChoiceRect(int width, int height, TerrainMode mode) {
+  const int buttonWidth = std::clamp(width - 80, 240, 440);
+  constexpr int buttonHeight = 84;
+  const int y = height / 2 + (mode == TerrainMode::Flat ? -98 : 20);
+  return {
+      (width - buttonWidth) / 2,
+      y,
+      buttonWidth,
+      buttonHeight,
+  };
+}
+
+bool containsPoint(const SDL_Rect &rectangle, int x, int y) {
+  return x >= rectangle.x && x < rectangle.x + rectangle.w &&
+         y >= rectangle.y && y < rectangle.y + rectangle.h;
+}
+
+void drawTerrainChoice(SDL_Renderer *renderer, const SDL_Rect &rectangle,
+                       TerrainMode mode, bool selected) {
+  if (selected) {
+    SDL_SetRenderDrawColor(renderer, 24, 54, 72, 255);
+  } else {
+    SDL_SetRenderDrawColor(renderer, 12, 23, 35, 255);
+  }
+  SDL_RenderFillRect(renderer, &rectangle);
+  if (selected) {
+    SDL_SetRenderDrawColor(renderer, 104, 242, 175, 255);
+  } else {
+    SDL_SetRenderDrawColor(renderer, 67, 91, 116, 255);
+  }
+  SDL_RenderDrawRect(renderer, &rectangle);
+
+  const std::string label = mode == TerrainMode::Flat ? "FLAT" : "NORMAL";
+  const std::string description =
+      mode == TerrainMode::Flat ? "INFINITE SUPERFLAT" : "ORIGINAL 4D TERRAIN";
+  const int centerX = rectangle.x + rectangle.w / 2;
+  drawCenteredBitmapText(renderer, label, centerX, rectangle.y + 13, 3,
+                         selected ? std::array<std::uint8_t, 3>{235, 255, 246}
+                                  : std::array<std::uint8_t, 3>{188, 205, 220});
+  drawCenteredBitmapText(renderer, description, centerX, rectangle.y + 59, 1,
+                         {145, 174, 198});
+}
+
+void drawWorldMenu(SDL_Renderer *renderer, TerrainMode selected, int width,
+                   int height) {
+  SDL_SetRenderDrawColor(renderer, 3, 7, 13, 255);
+  SDL_RenderClear(renderer);
+
+  const int titleScale = width >= 700 ? 4 : 2;
+  drawCenteredBitmapText(renderer, "SELECT WORLD", width / 2,
+                         std::max(32, height / 7), titleScale, {226, 238, 250});
+  drawCenteredBitmapText(renderer, "CHOOSE TERRAIN", width / 2,
+                         std::max(80, height / 7 + 52), 2, {104, 242, 175});
+
+  const SDL_Rect flat = terrainChoiceRect(width, height, TerrainMode::Flat);
+  const SDL_Rect normal =
+      terrainChoiceRect(width, height, TerrainMode::Density);
+  drawTerrainChoice(renderer, flat, TerrainMode::Flat,
+                    selected == TerrainMode::Flat);
+  drawTerrainChoice(renderer, normal, TerrainMode::Density,
+                    selected == TerrainMode::Density);
+
+  drawCenteredBitmapText(renderer, "ARROWS ENTER OR CLICK", width / 2,
+                         std::max(height - 54, normal.y + normal.h + 24), 2,
+                         {126, 151, 174});
+  SDL_RenderPresent(renderer);
+}
+
+std::optional<TerrainMode> chooseTerrainMode(SDL_Renderer *renderer) {
+  TerrainMode selected = TerrainMode::Flat;
+  while (true) {
+    int width = 1;
+    int height = 1;
+    SDL_GetRendererOutputSize(renderer, &width, &height);
+    const SDL_Rect flat = terrainChoiceRect(width, height, TerrainMode::Flat);
+    const SDL_Rect normal =
+        terrainChoiceRect(width, height, TerrainMode::Density);
+
+    SDL_Event event{};
+    while (SDL_PollEvent(&event) != 0) {
+      if (event.type == SDL_QUIT ||
+          (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)) {
+        return std::nullopt;
+      }
+      if (event.type == SDL_KEYDOWN) {
+        const SDL_Keycode key = event.key.keysym.sym;
+        if (key == SDLK_UP || key == SDLK_DOWN || key == SDLK_LEFT ||
+            key == SDLK_RIGHT || key == SDLK_TAB) {
+          selected = selected == TerrainMode::Flat ? TerrainMode::Density
+                                                   : TerrainMode::Flat;
+        } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER ||
+                   key == SDLK_SPACE) {
+          return selected;
+        } else if (key == SDLK_f) {
+          return TerrainMode::Flat;
+        } else if (key == SDLK_n) {
+          return TerrainMode::Density;
+        }
+      } else if (event.type == SDL_MOUSEMOTION) {
+        if (containsPoint(flat, event.motion.x, event.motion.y)) {
+          selected = TerrainMode::Flat;
+        } else if (containsPoint(normal, event.motion.x, event.motion.y)) {
+          selected = TerrainMode::Density;
+        }
+      } else if (event.type == SDL_MOUSEBUTTONDOWN &&
+                 event.button.button == SDL_BUTTON_LEFT) {
+        if (containsPoint(flat, event.button.x, event.button.y)) {
+          return TerrainMode::Flat;
+        }
+        if (containsPoint(normal, event.button.x, event.button.y)) {
+          return TerrainMode::Density;
+        }
+      }
+    }
+    drawWorldMenu(renderer, selected, width, height);
+    SDL_Delay(8U);
+  }
 }
 
 void render(SDL_Renderer *renderer, const BlockWorld &world,
@@ -260,7 +426,8 @@ bool saveRendererBitmap(SDL_Renderer *renderer, int width, int height,
 
 } // namespace
 
-int runApplication(bool smokeTest, const std::string &smokeOutput) {
+int runApplication(RunMode mode, const std::string &smokeOutput) {
+  const bool smokeTest = mode != RunMode::Interactive;
   if (smokeTest) {
     SDL_setenv("SDL_VIDEODRIVER", "dummy", 1);
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
@@ -274,11 +441,9 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
   constexpr int initialHeight = 800;
   const Uint32 windowFlags =
       SDL_WINDOW_RESIZABLE | (smokeTest ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN);
-  SDL_Window *window =
-      SDL_CreateWindow("Proj4D | W/S move | Space jump | A/D + arrows + Q/E "
-                       "look | LMB break | RMB build",
-                       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                       initialWidth, initialHeight, windowFlags);
+  SDL_Window *window = SDL_CreateWindow(
+      "Proj4D | Select World", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+      initialWidth, initialHeight, windowFlags);
   if (window == nullptr) {
     std::cerr << "Window creation failed: " << SDL_GetError() << '\n';
     SDL_Quit();
@@ -299,7 +464,44 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
     return 1;
   }
 
-  BlockWorld world;
+  if (mode == RunMode::MenuSmokeTest) {
+    int width = initialWidth;
+    int height = initialHeight;
+    SDL_GetRendererOutputSize(renderer, &width, &height);
+    drawWorldMenu(renderer, TerrainMode::Flat, width, height);
+    const bool saved = saveRendererBitmap(renderer, width, height, smokeOutput);
+    if (!saved) {
+      std::cerr << "Could not save menu smoke image: " << SDL_GetError()
+                << '\n';
+    }
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return saved ? 0 : 1;
+  }
+
+  std::optional<TerrainMode> selectedTerrain;
+  if (mode == RunMode::Interactive) {
+    selectedTerrain = chooseTerrainMode(renderer);
+  } else if (mode == RunMode::NormalSmokeTest) {
+    selectedTerrain = TerrainMode::Density;
+  } else {
+    selectedTerrain = TerrainMode::Flat;
+  }
+  if (!selectedTerrain) {
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return 0;
+  }
+
+  const std::string worldName =
+      *selectedTerrain == TerrainMode::Flat ? "Flat" : "Normal";
+  SDL_SetWindowTitle(window, ("Proj4D | " + worldName +
+                              " World | W/S move | Space jump | A/D + arrows "
+                              "+ Q/E look | LMB break | RMB build")
+                                 .c_str());
+  BlockWorld world(*selectedTerrain);
   Camera4D camera;
   const int spawnSurface = world.surfaceHeightAt(0, 0, 0);
   const Vec4 spawnPosition{
@@ -318,7 +520,8 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
 
   if (!smokeTest) {
     SDL_SetRelativeMouseMode(SDL_TRUE);
-    std::cout << "Proj4D controls:\n"
+    std::cout << "Proj4D " << worldName << " world\n"
+              << "Controls:\n"
               << "  W/S: move forward/backward in 4D\n"
               << "  Space: jump 1.5 blocks\n"
               << "  A/D: turn left/right\n"
@@ -401,7 +604,8 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
 
     ++frameCount;
     if (!smokeTest && frameCount % 60 == 0) {
-      const std::string title = "Proj4D | infinite 16^4 chunks | loaded " +
+      const std::string title = "Proj4D | " + worldName +
+                                " | infinite 16^4 chunks | loaded " +
                                 std::to_string(world.loadedChunkCount()) +
                                 " | W/S move | A/D + arrows + Q/E look";
       SDL_SetWindowTitle(window, title.c_str());

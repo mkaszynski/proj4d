@@ -347,6 +347,35 @@ void testFlatTerrainAndPreservedDensityFunctions() {
          "smooth flat terrain retains only a bounded outer wireframe guide");
 }
 
+void testBlockWorldUsesTheSelectedTerrainMode() {
+  constexpr std::uint32_t seed = 424242U;
+  proj4d::BlockWorld flat(proj4d::TerrainMode::Flat, seed, 4U);
+  proj4d::BlockWorld normal(proj4d::TerrainMode::Density, seed, 4U);
+  const proj4d::TerrainGenerator original(seed, proj4d::TerrainMode::Density);
+
+  expect(flat.terrainMode() == proj4d::TerrainMode::Flat,
+         "Flat menu choice creates a flat BlockWorld");
+  expect(normal.terrainMode() == proj4d::TerrainMode::Density,
+         "Normal menu choice creates a density BlockWorld");
+
+  bool modesDiffer = false;
+  for (int w = -4; w <= 4 && !modesDiffer; w += 2) {
+    for (int z = -4; z <= 4 && !modesDiffer; z += 2) {
+      for (int y = -12; y <= 16 && !modesDiffer; ++y) {
+        const proj4d::BlockCoord sample{2, y, z, w};
+        expect(normal.generatedSolidAt(sample) ==
+                   original.generatedSolidAt(sample),
+               "Normal world uses the retained original terrain function");
+        modesDiffer =
+            flat.generatedSolidAt(sample) != normal.generatedSolidAt(sample);
+      }
+    }
+  }
+  expect(modesDiffer, "Flat and Normal menu choices create different terrain");
+  expect(normal.surfaceHeightAt(0, 0, 0) == original.surfaceHeightAt(0, 0, 0),
+         "Normal world uses the original surface search");
+}
+
 void testInfiniteWorldCacheAndEdits() {
   proj4d::BlockWorld world(2468U, 2U);
   static_cast<void>(world.isSolid({0, 0, 0, 0}));
@@ -470,6 +499,7 @@ int main() {
     testPlayerJumpsOneAndAHalfBlocks();
     testTrueFourDimensionalChunks();
     testFlatTerrainAndPreservedDensityFunctions();
+    testBlockWorldUsesTheSelectedTerrainMode();
     testInfiniteWorldCacheAndEdits();
     testOccludedFacesAndSmoothEdgesAreCulled();
     testTerrainOccludesUndergroundCavities();

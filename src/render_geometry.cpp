@@ -55,8 +55,10 @@ struct EdgeIncidence {
 };
 
 void appendFlatSurfaceGuide(std::vector<FeatureEdge4D> &edges,
-                            const BlockCoord &center, int radius) {
-  if (center.y - radius > flatGroundSurfaceY ||
+                            const BlockWorld &world, const BlockCoord &center,
+                            int radius) {
+  if (world.terrainMode() != TerrainMode::Flat ||
+      center.y - radius > flatGroundSurfaceY ||
       center.y + radius < flatGroundSurfaceY) {
     return;
   }
@@ -192,7 +194,7 @@ std::vector<FeatureEdge4D> buildFeatureEdges(const BlockWorld &world,
     }
     edges.push_back({toVec4(key.lower), toVec4(upper), representativeAxis});
   }
-  appendFlatSurfaceGuide(edges, center, radius);
+  appendFlatSurfaceGuide(edges, world, center, radius);
   return edges;
 }
 

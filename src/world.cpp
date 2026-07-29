@@ -9,7 +9,11 @@
 namespace proj4d {
 
 BlockWorld::BlockWorld(std::uint32_t seed, std::size_t maximumLoadedChunks)
-    : generator_(seed),
+    : BlockWorld(TerrainMode::Flat, seed, maximumLoadedChunks) {}
+
+BlockWorld::BlockWorld(TerrainMode terrainMode, std::uint32_t seed,
+                       std::size_t maximumLoadedChunks)
+    : generator_(seed, terrainMode),
       maximumLoadedChunks_(std::max<std::size_t>(1U, maximumLoadedChunks)) {}
 
 Chunk &BlockWorld::ensureChunk(const ChunkCoord &coordinate) const {
@@ -81,6 +85,8 @@ int BlockWorld::surfaceHeightAt(int x, int z, int w) const {
 }
 
 std::uint32_t BlockWorld::seed() const { return generator_.seed(); }
+
+TerrainMode BlockWorld::terrainMode() const { return generator_.mode(); }
 
 std::size_t BlockWorld::loadedChunkCount() const { return chunks_.size(); }
 

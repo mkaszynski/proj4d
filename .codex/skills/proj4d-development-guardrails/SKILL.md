@@ -1,6 +1,6 @@
 ---
 name: proj4d-development-guardrails
-description: Preserve Proj4D's infinite true four-spatial-dimensional C++ world, 16x16x16x16 chunks, infinite superflat terrain, retained 4D density functions, projected 3D vision, bounded streaming performance, tests, and public-repository privacy. Use whenever creating, changing, debugging, reviewing, testing, or releasing the Proj4D repository.
+description: Preserve Proj4D's infinite true four-spatial-dimensional C++ world, 16x16x16x16 chunks, selectable superflat and original density terrain, projected 3D vision, bounded streaming performance, tests, and public-repository privacy. Use whenever creating, changing, debugging, reviewing, testing, or releasing the Proj4D repository.
 ---
 
 # Proj4D Development Guardrails
@@ -14,12 +14,13 @@ Apply these invariants to every change in the Proj4D repository.
 - Keep the world unbounded and procedurally generated in all four axes.
 - Keep the real world unit as a `16x16x16x16` chunk with explicit 4D chunk and
   local coordinates, including correct floor division for negative positions.
-- Generate the active world as a four-dimensional superflat field: every block
-  at `y <= 0` is solid, every block at `y > 0` is air, and the field is
-  unbounded across `x`, `z`, and `w` and infinitely deep.
-- Preserve the original deterministic seeded four-dimensional density and noise
-  terrain as the explicitly selectable `TerrainMode::Density`, but keep the
-  actual game on `TerrainMode::Flat`.
+- Present a startup menu before world creation with `Flat` and `Normal`
+  choices. Support keyboard and mouse selection.
+- Generate `Flat` as a four-dimensional superflat field: every block at
+  `y <= 0` is solid, every block at `y > 0` is air, and the field is unbounded
+  across `x`, `z`, and `w` and infinitely deep.
+- Generate `Normal` with the original deterministic seeded four-dimensional
+  density and noise terrain through `TerrainMode::Density`.
 - Represent each block as a tesseract with eight cubic boundary cells.
 - Render a native 4D perspective view into a solid 3D vision volume. Do not
   replace the view with 3D slices, independent 3D worlds, or fake depth.
@@ -29,11 +30,12 @@ Apply these invariants to every change in the Proj4D repository.
   chunk boundaries. Preserve exposed faces even when geometry overlaps after
   projection.
 - Keep the perfectly smooth superflat surface legible with one bounded outer
-  wireframe guide around the local render region. Do not restore internal grid
-  lines between smoothly joined surface cells.
-- Never treat a missing or not-yet-cached neighbor chunk as air. Generate its
-  superflat terrain under the bounded loading policy before deciding that a face
-  is exposed.
+  wireframe guide around the local render region, but never add that guide to a
+  Normal world. Do not restore internal grid lines between smoothly joined
+  surface cells.
+- Never treat a missing or not-yet-cached neighbor chunk as air. Generate it
+  from the selected terrain mode under the bounded loading policy before
+  deciding that a face is exposed.
 - Keep the three independent look rotations: vertical, ordinary horizontal,
   and fourth-dimensional horizontal.
 
@@ -56,12 +58,12 @@ Apply these invariants to every change in the Proj4D repository.
 - Cache topology extraction independently from camera projection so ordinary
   look rotation does not regenerate chunks or rescan blocks.
 - Add tests for every behavior change, especially 4D basis orthogonality,
-  negative chunk math, the flat `y=0` boundary across distant `x/z/w`
-  coordinates, preserved density determinism, deep terrain, chunk boundaries,
-  occluded-face culling, cache limits, edit survival, projection clipping, and
-  ray interaction.
-- Run the complete build, CTest suite, and headless graphical smoke test before
-  handoff.
+  negative chunk math, menu mode routing, the flat `y=0` boundary across distant
+  `x/z/w` coordinates, Normal density determinism, deep terrain, chunk
+  boundaries, occluded-face culling, cache limits, edit survival, projection
+  clipping, and ray interaction.
+- Run the complete build, CTest suite, and headless graphical smoke tests for
+  the menu, Flat, and Normal before handoff.
 - Treat broken native frame rate or unbounded geometry growth as regressions.
 
 ## Keep the Repository Public-Safe
