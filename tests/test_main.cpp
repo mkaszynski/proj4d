@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <exception>
@@ -6,6 +7,7 @@
 
 #include "proj4d/camera.hpp"
 #include "proj4d/chunk.hpp"
+#include "proj4d/player_motion.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/terrain_generator.hpp"
 #include "proj4d/world.hpp"
@@ -51,6 +53,157 @@ void testCameraProjectionAndRotation() {
              "4D camera basis remains orthogonal");
     }
   }
+}
+
+void testVerticalLookStopsAtStraightUpAndDown() {
+  proj4d::Camera4D camera;
+  camera.turnVertical(10.0);
+  expect(proj4d::nearlyEqual(camera.verticalPitch(),
+                             proj4d::straightVerticalPitch),
+         "vertical look stops at straight up");
+  expect(proj4d::nearlyEqual(camera.forward.y, 1.0),
+         "straight-up view points along the world vertical axis");
+
+  camera.turnVertical(1.0);
+  camera.turnHorizontal(0.4);
+  camera.turnFourth(-0.3);
+  expect(proj4d::nearlyEqual(camera.verticalPitch(),
+                             proj4d::straightVerticalPitch),
+         "additional and horizontal turns cannot cross the upper pitch limit");
+
+  camera.turnVertical(-10.0);
+  expect(proj4d::nearlyEqual(camera.verticalPitch(),
+                             -proj4d::straightVerticalPitch),
+         "vertical look stops at straight down");
+  expect(proj4d::nearlyEqual(camera.forward.y, -1.0),
+         "straight-down view points against the world vertical axis");
+
+  const std::array<proj4d::Vec4, 4> basis{
+      camera.imageX,
+      camera.imageY,
+      camera.imageZ,
+      camera.forward,
+  };
+  for (std::size_t left = 0; left < basis.size(); ++left) {
+    expect(proj4d::nearlyEqual(proj4d::length(basis[left]), 1.0, 1.0e-8),
+           "pitch-limited camera basis remains normalized");
+    for (std::size_t right = left + 1; right < basis.size(); ++right) {
+      expect(proj4d::nearlyEqual(proj4d::dot(basis[left], basis[right]), 0.0,
+                                 1.0e-8),
+             "pitch-limited camera basis remains orthogonal");
+    }
+  }
+}
+
+void testHorizontalLookKeepsTheViewLevel() {
+  proj4d::Camera4D camera;
+  camera.turnVertical(0.7);
+  const double verticalComponent = camera.forward.y;
+  camera.turnHorizontal(0.8);
+  camera.turnHorizontal(0.8);
+
+  expect(proj4d::nearlyEqual(camera.verticalPitch(), 0.7),
+         "left and right look preserve the vertical viewing angle");
+  expect(proj4d::nearlyEqual(camera.forward.y, verticalComponent),
+         "left and right look follow a level circle");
+  expect(proj4d::nearlyEqual(camera.imageX.y, 0.0),
+         "left and right look do not roll or tilt the horizon");
+}
+
+void testGroundedPlayerCanMoveWithoutJumping() {
+  proj4d::BlockWorld world(777U);
+  const proj4d::BlockCoord ground{0, 2, 0, 0};
+  static_cast<void>(world.setSolid(ground, true));
+  static_cast<void>(world.setSolid({0, 3, 0, 0}, false));
+  static_cast<void>(world.setSolid({0, 4, 0, 0}, false));
+  expect(world.isSolid(ground), "movement fixture has solid ground");
+  expect(!world.isSolid({0, 3, 0, 0}),
+         "movement fixture has clear lower body space");
+  expect(!world.isSolid({0, 4, 0, 0}), "movement fixture has clear eye space");
+
+  proj4d::Camera4D camera;
+  camera.position = {
+      0.25,
+      static_cast<double>(ground.y + 1) + proj4d::playerEyeHeight,
+      0.25,
+      0.25,
+  };
+  const proj4d::Vec4 spawnPosition = camera.position;
+  proj4d::PlayerMotionState motion{0.0, true, spawnPosition};
+
+  expect(proj4d::playerLowerBodyBlock(camera.position) ==
+             proj4d::BlockCoord{0, 3, 0, 0},
+         "standing collision probe stays above the supporting block");
+  expect(proj4d::playerCanOccupy(world, camera.position),
+         "grounded player position is not mistaken for a collision");
+
+  proj4d::updatePlayerMotion(camera, world, motion, 1.0, 0.1);
+  expect(camera.position.z > spawnPosition.z,
+         "grounded player moves forward without jumping");
+  expect(motion.grounded, "player remains grounded after horizontal movement");
+  expect(proj4d::nearlyEqual(camera.position.y, spawnPosition.y),
+         "ground contact preserves standing eye height");
+}
+
+void testPlayerSlidesAlongBlockedFaces() {
+  proj4d::BlockWorld world(31337U);
+  for (int y = 2; y <= 4; ++y) {
+    for (int x = 0; x <= 1; ++x) {
+      static_cast<void>(world.setSolid({x, y, 0, 0}, false));
+    }
+  }
+  static_cast<void>(world.setSolid({0, 2, 0, 0}, true));
+  static_cast<void>(world.setSolid({1, 3, 0, 0}, true));
+  static_cast<void>(world.setSolid({1, 4, 0, 0}, true));
+
+  proj4d::Camera4D camera;
+  camera.position = {
+      0.75,
+      3.0 + proj4d::playerEyeHeight,
+      0.25,
+      0.25,
+  };
+  camera.turnHorizontal(proj4d::straightVerticalPitch * 0.5);
+  const proj4d::Vec4 spawnPosition = camera.position;
+  proj4d::PlayerMotionState motion{0.0, true, spawnPosition};
+
+  proj4d::updatePlayerMotion(camera, world, motion, 1.0, 0.2);
+  expect(proj4d::nearlyEqual(camera.position.x, spawnPosition.x),
+         "blocked movement component stops at the wall");
+  expect(camera.position.z > spawnPosition.z,
+         "free movement component slides along the wall");
+}
+
+void testPlayerJumpsOneAndAHalfBlocks() {
+  proj4d::BlockWorld world(888U);
+  const proj4d::BlockCoord ground{0, 2, 0, 0};
+  static_cast<void>(world.setSolid(ground, true));
+  for (int y = 3; y <= 6; ++y) {
+    static_cast<void>(world.setSolid({0, y, 0, 0}, false));
+  }
+
+  proj4d::Camera4D camera;
+  camera.position = {
+      0.25,
+      static_cast<double>(ground.y + 1) + proj4d::playerEyeHeight,
+      0.25,
+      0.25,
+  };
+  const proj4d::Vec4 spawnPosition = camera.position;
+  proj4d::PlayerMotionState motion{0.0, true, spawnPosition};
+  proj4d::requestPlayerJump(motion);
+
+  double maximumEyeY = camera.position.y;
+  for (int step = 0; step < 240 && !motion.grounded; ++step) {
+    proj4d::updatePlayerMotion(camera, world, motion, 0.0, 1.0 / 120.0);
+    maximumEyeY = std::max(maximumEyeY, camera.position.y);
+  }
+  expect(proj4d::nearlyEqual(maximumEyeY - spawnPosition.y,
+                             proj4d::playerJumpHeight, 1.0e-3),
+         "jump rises one and a half blocks");
+  expect(motion.grounded, "jump finishes by landing on the ground");
+  expect(proj4d::nearlyEqual(camera.position.y, spawnPosition.y),
+         "landing restores the standing eye height");
 }
 
 void testTrueFourDimensionalChunks() {
@@ -164,6 +317,34 @@ void testOccludedFacesAndSmoothEdgesAreCulled() {
          "smooth face and ridge grids collapse to a clean joined outline");
 }
 
+void testTerrainOccludesUndergroundCavities() {
+  proj4d::BlockWorld world(5150U);
+  for (int y = 1000; y <= 1005; ++y) {
+    static_cast<void>(world.setSolid({0, y, 0, 0}, false));
+  }
+  static_cast<void>(world.setSolid({0, 999, 0, 0}, true));
+
+  proj4d::Camera4D camera;
+  camera.position = {0.5, 1005.0, 0.0, 0.0};
+  camera.turnVertical(-proj4d::straightVerticalPitch);
+  const std::array<proj4d::FeatureEdge4D, 1> cavityEdge{{
+      {{0.0, 1000.0, 0.0, 0.0}, {1.0, 1000.0, 0.0, 0.0}, 1},
+  }};
+  expect(proj4d::projectVisibleFeatureEdges(world, cavityEdge, camera).size() ==
+             1U,
+         "an unobstructed cavity boundary is visible");
+
+  const std::array<proj4d::FeatureEdge4D, 1> buriedEdge{{
+      {{0.0, 999.0, 0.0, 0.0}, {1.0, 999.0, 0.0, 0.0}, 1},
+  }};
+  expect(proj4d::projectVisibleFeatureEdges(world, buriedEdge, camera).empty(),
+         "a solid block hides its own rear boundary");
+
+  static_cast<void>(world.setSolid({0, 1002, 0, 0}, true));
+  expect(proj4d::projectVisibleFeatureEdges(world, cavityEdge, camera).empty(),
+         "nearer solid terrain hides an underground cavity boundary");
+}
+
 void testRaycastBuildingAndBreaking() {
   proj4d::BlockWorld world(9090U);
   const proj4d::BlockCoord target{0, 1000, 0, 0};
@@ -214,10 +395,16 @@ void testVisionGeometryIsBounded() {
 int main() {
   try {
     testCameraProjectionAndRotation();
+    testVerticalLookStopsAtStraightUpAndDown();
+    testHorizontalLookKeepsTheViewLevel();
+    testGroundedPlayerCanMoveWithoutJumping();
+    testPlayerSlidesAlongBlockedFaces();
+    testPlayerJumpsOneAndAHalfBlocks();
     testTrueFourDimensionalChunks();
     testProceduralDensityField();
     testInfiniteWorldCacheAndEdits();
     testOccludedFacesAndSmoothEdgesAreCulled();
+    testTerrainOccludesUndergroundCavities();
     testRaycastBuildingAndBreaking();
     testVisionGeometryIsBounded();
   } catch (const std::exception &error) {

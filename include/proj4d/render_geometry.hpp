@@ -40,6 +40,10 @@ buildFeatureEdges(const BlockWorld &world, const BlockCoord &center,
 projectFeatureEdges(std::span<const FeatureEdge4D> edges,
                     const Camera4D &camera);
 [[nodiscard]] std::vector<Line3>
+projectVisibleFeatureEdges(const BlockWorld &world,
+                           std::span<const FeatureEdge4D> edges,
+                           const Camera4D &camera);
+[[nodiscard]] std::vector<Line3>
 buildVisionGeometry(const BlockWorld &world, const Camera4D &camera,
                     const BlockCoord &center, int radius = renderBlockRadius);
 [[nodiscard]] std::vector<Line3>

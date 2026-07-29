@@ -54,6 +54,23 @@ struct EdgeIncidence {
   std::bitset<8> boundaryNormals{};
 };
 
+Vec4 edgeMidpoint(const FeatureEdge4D &edge) {
+  return (edge.from + edge.to) * 0.5;
+}
+
+bool hasClearSightline(const BlockWorld &world, const Camera4D &camera,
+                       const FeatureEdge4D &edge) {
+  constexpr double targetInset = 1.0e-5;
+  const Vec4 offset = edgeMidpoint(edge) - camera.position;
+  const double distance = length(offset);
+  if (distance <= camera.nearPlane) {
+    return true;
+  }
+  const auto obstruction =
+      raycast(world, camera.position, offset, distance - targetInset);
+  return !obstruction;
+}
+
 std::optional<Line3> projectEdge(const Camera4D &camera, Vec4 from, Vec4 to,
                                  int boundaryAxis) {
   double fromDepth = dot(from - camera.position, camera.forward);
@@ -207,10 +224,27 @@ std::vector<Line3> projectFeatureEdges(std::span<const FeatureEdge4D> edges,
   return lines;
 }
 
+std::vector<Line3>
+projectVisibleFeatureEdges(const BlockWorld &world,
+                           std::span<const FeatureEdge4D> edges,
+                           const Camera4D &camera) {
+  std::vector<Line3> lines;
+  lines.reserve(edges.size());
+  for (const FeatureEdge4D &edge : edges) {
+    const auto line = projectEdge(camera, edge.from, edge.to,
+                                  edge.representativeBoundaryAxis);
+    if (line && hasClearSightline(world, camera, edge)) {
+      lines.push_back(*line);
+    }
+  }
+  return lines;
+}
+
 std::vector<Line3> buildVisionGeometry(const BlockWorld &world,
                                        const Camera4D &camera,
                                        const BlockCoord &center, int radius) {
-  return projectFeatureEdges(buildFeatureEdges(world, center, radius), camera);
+  return projectVisibleFeatureEdges(
+      world, buildFeatureEdges(world, center, radius), camera);
 }
 
 std::vector<Line3> buildTesseractWireframe(const BlockCoord &block,

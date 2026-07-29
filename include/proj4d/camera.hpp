@@ -6,6 +6,8 @@
 
 namespace proj4d {
 
+inline constexpr double straightVerticalPitch = 1.57079632679489661923;
+
 struct ProjectedPoint {
   Vec3 position{};
   double depth{};
@@ -27,9 +29,14 @@ public:
   void turnFourth(double radians);
   [[nodiscard]] std::optional<ProjectedPoint> project(const Vec4 &point) const;
   [[nodiscard]] Vec4 flattenedForward() const;
+  [[nodiscard]] double verticalPitch() const;
 
 private:
-  void rotateViewPlane(Vec4 &imageAxis, double radians);
+  void rotateHorizontalPlane(Vec4 &imageAxis, double radians);
+  void rebuildPitchedFrame();
+
+  Vec4 horizontalForward_{0.0, 0.0, 1.0, 0.0};
+  double verticalPitch_{};
 };
 
 } // namespace proj4d

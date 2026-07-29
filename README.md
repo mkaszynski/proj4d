@@ -57,9 +57,9 @@ bitmap of the rendered vision cube:
 | Input | Action |
 |---|---|
 | `W` / `S` | Move forward or backward along the current 4D viewing direction |
-| `Space` | Jump along the world's vertical axis |
+| `Space` | Jump 1.5 blocks along the world's vertical axis |
 | `A` / `D` | Turn left or right |
-| `Up` / `Down` | Look up or down |
+| `Up` / `Down` | Look up or down, stopping at straight up or straight down |
 | `Q` / `E` | Turn through the fourth spatial dimension |
 | Mouse movement | Orbit the solid 3D vision cube |
 | Mouse wheel | Zoom the external view of the vision cube |
@@ -77,7 +77,9 @@ wireframes are tinted by which of the four world axes their cubic cell faces.
 - `BlockWorld` owns lazy generation, durable edit overrides, and a bounded
   generated-chunk cache for the unbounded coordinate space.
 - `Camera4D` owns an orthonormal four-axis camera frame and performs true
-  4D-to-3D perspective projection.
+  4D-to-3D perspective projection with level yaw and bounded vertical pitch.
+- View-dependent sightline culling prevents nearer solid terrain from exposing
+  wireframes belonging to hidden caves.
 - `buildVisionGeometry` examines a fixed local 4D region, rejects cubic faces
   blocked by solid neighbors, and clips projected feature edges to the cube.
 - The SDL layer owns input, the final 3D-to-2D display projection, and drawing.

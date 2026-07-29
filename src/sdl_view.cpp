@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "proj4d/camera.hpp"
+#include "proj4d/player_motion.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/world.hpp"
 
@@ -21,7 +22,6 @@ namespace proj4d {
 namespace {
 
 constexpr double pi = 3.14159265358979323846;
-constexpr double eyeHeight = 1.1;
 
 struct DisplayCamera {
   double yaw{-0.58};
@@ -136,7 +136,7 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
     geometryCache.initialized = true;
   }
   const std::vector<Line3> lines =
-      projectFeatureEdges(geometryCache.edges, camera);
+      projectVisibleFeatureEdges(world, geometryCache.edges, camera);
   constexpr std::array<std::array<std::uint8_t, 3>, 4> colors{{
       {245, 140, 140},
       {150, 245, 165},
@@ -154,43 +154,6 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
   }
   drawCrosshair(renderer, display, width, height);
   SDL_RenderPresent(renderer);
-}
-
-void updatePlayer(Camera4D &camera, const BlockWorld &world,
-                  double &verticalVelocity, bool &grounded, double moveInput,
-                  double deltaSeconds, const Vec4 &spawnPosition) {
-  constexpr double movementSpeed = 2.4;
-  constexpr double gravity = -8.5;
-  if (moveInput != 0.0) {
-    const Vec4 movement =
-        camera.flattenedForward() * (moveInput * movementSpeed * deltaSeconds);
-    const Vec4 candidate = camera.position + movement;
-    if (!world.isSolid(containingBlock(candidate)) &&
-        !world.isSolid(containingBlock({candidate.x, candidate.y - eyeHeight,
-                                        candidate.z, candidate.w}))) {
-      camera.position = candidate;
-    }
-  }
-
-  verticalVelocity += gravity * deltaSeconds;
-  camera.position.y += verticalVelocity * deltaSeconds;
-  const BlockCoord below = containingBlock({
-      camera.position.x,
-      camera.position.y - eyeHeight - 0.02,
-      camera.position.z,
-      camera.position.w,
-  });
-  if (verticalVelocity <= 0.0 && world.isSolid(below)) {
-    camera.position.y = static_cast<double>(below.y + 1) + eyeHeight;
-    verticalVelocity = 0.0;
-    grounded = true;
-  } else {
-    grounded = false;
-  }
-  if (camera.position.y < -4096.0) {
-    camera.position = spawnPosition;
-    verticalVelocity = 0.0;
-  }
 }
 
 bool saveRendererBitmap(SDL_Renderer *renderer, int width, int height,
@@ -254,7 +217,7 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
   const int spawnSurface = world.surfaceHeightAt(0, 0, 0);
   const Vec4 spawnPosition{
       0.5,
-      static_cast<double>(spawnSurface + 1) + eyeHeight,
+      static_cast<double>(spawnSurface + 1) + playerEyeHeight,
       0.5,
       0.5,
   };
@@ -262,8 +225,7 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
   camera.turnVertical(-0.28);
   DisplayCamera display;
   FeatureGeometryCache geometryCache;
-  double verticalVelocity = 0.0;
-  bool grounded = true;
+  PlayerMotionState playerMotion{0.0, true, spawnPosition};
   bool running = true;
   std::uint64_t previousCounter = SDL_GetPerformanceCounter();
 
@@ -271,9 +233,9 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
     SDL_SetRelativeMouseMode(SDL_TRUE);
     std::cout << "Proj4D controls:\n"
               << "  W/S: move forward/backward in 4D\n"
-              << "  Space: jump\n"
+              << "  Space: jump 1.5 blocks\n"
               << "  A/D: turn left/right\n"
-              << "  Up/Down: look up/down\n"
+              << "  Up/Down: look up/down (limited to straight up/down)\n"
               << "  Q/E: turn through the fourth dimension\n"
               << "  Mouse: orbit the solid 3D vision cube\n"
               << "  Mouse wheel: zoom the vision cube\n"
@@ -316,7 +278,7 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
               containingBlock(camera.position),
               containingBlock({
                   camera.position.x,
-                  camera.position.y - eyeHeight,
+                  camera.position.y - playerEyeHeight + playerCollisionInset,
                   camera.position.z,
                   camera.position.w,
               }),
@@ -325,9 +287,8 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
               world, camera.position, camera.forward, 8.0, protectedBlocks));
         }
       } else if (event.type == SDL_KEYDOWN &&
-                 event.key.keysym.sym == SDLK_SPACE && grounded) {
-        verticalVelocity = 4.25;
-        grounded = false;
+                 event.key.keysym.sym == SDLK_SPACE) {
+        requestPlayerJump(playerMotion);
       }
     }
 
@@ -344,8 +305,7 @@ int runApplication(bool smokeTest, const std::string &smokeOutput) {
     camera.turnFourth(((keys[SDL_SCANCODE_E] != 0 ? 1.0 : 0.0) -
                        (keys[SDL_SCANCODE_Q] != 0 ? 1.0 : 0.0)) *
                       turnSpeed * deltaSeconds);
-    updatePlayer(camera, world, verticalVelocity, grounded, movement,
-                 deltaSeconds, spawnPosition);
+    updatePlayerMotion(camera, world, playerMotion, movement, deltaSeconds);
 
     int width = initialWidth;
     int height = initialHeight;
