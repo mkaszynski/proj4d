@@ -38,6 +38,9 @@ Apply these invariants to every change in the Proj4D repository.
   wireframe guide around the local render region. Never add that guide to Low
   or Normal; render their generated terrain feature edges. Do not restore
   internal grid lines between smoothly joined surface cells.
+- Color each world edge by the 4D axis it actually follows: red `X`, green `Y`,
+  blue `Z`, and purple `W`. Do not choose a color from an incident face or
+  cycle colors decoratively.
 - Never treat a missing or not-yet-cached neighbor chunk as air. Generate it
   from the selected terrain mode under the bounded loading policy before
   deciding that a face is exposed.

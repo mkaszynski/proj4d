@@ -12,13 +12,13 @@ namespace proj4d {
 struct Line3 {
   Vec3 from{};
   Vec3 to{};
-  int boundaryAxis{};
+  int worldAxis{};
 };
 
 struct FeatureEdge4D {
   Vec4 from{};
   Vec4 to{};
-  int representativeBoundaryAxis{};
+  int worldAxis{};
 };
 
 struct VisibleBoundaryCell4D {

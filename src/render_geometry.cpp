@@ -98,7 +98,7 @@ void appendFlatSurfaceGuide(std::vector<FeatureEdge4D> &edges,
       BlockCoord to = from;
       to[static_cast<std::size_t>(edgeAxis)] =
           maximum[static_cast<std::size_t>(edgeAxis)];
-      edges.push_back({toVec4(from), toVec4(to), 1});
+      edges.push_back({toVec4(from), toVec4(to), edgeAxis});
     }
   }
 }
@@ -121,7 +121,7 @@ bool hasClearSightline(const BlockWorld &world, const Camera4D &camera,
 }
 
 std::optional<Line3> projectEdge(const Camera4D &camera, Vec4 from, Vec4 to,
-                                 int boundaryAxis) {
+                                 int worldAxis) {
   double fromDepth = dot(from - camera.position, camera.forward);
   double toDepth = dot(to - camera.position, camera.forward);
   if ((fromDepth > camera.farPlane && toDepth > camera.farPlane) ||
@@ -144,7 +144,7 @@ std::optional<Line3> projectEdge(const Camera4D &camera, Vec4 from, Vec4 to,
     return std::nullopt;
   }
   return clipLineToVisionCube(
-      {projectedFrom->position, projectedTo->position, boundaryAxis});
+      {projectedFrom->position, projectedTo->position, worldAxis});
 }
 
 } // namespace
@@ -186,15 +186,7 @@ std::vector<FeatureEdge4D> buildFeatureEdges(const BlockWorld &world,
     }
     BlockCoord upper = key.lower;
     upper[static_cast<std::size_t>(key.axis)] += 1;
-    int representativeAxis = 0;
-    for (std::size_t normal = 0; normal < incidence.boundaryNormals.size();
-         ++normal) {
-      if (incidence.boundaryNormals.test(normal)) {
-        representativeAxis = static_cast<int>(normal / 2U);
-        break;
-      }
-    }
-    edges.push_back({toVec4(key.lower), toVec4(upper), representativeAxis});
+    edges.push_back({toVec4(key.lower), toVec4(upper), key.axis});
   }
   appendFlatSurfaceGuide(edges, world, center, radius);
   return edges;
@@ -266,8 +258,7 @@ std::vector<Line3> projectFeatureEdges(std::span<const FeatureEdge4D> edges,
   std::vector<Line3> lines;
   lines.reserve(edges.size());
   for (const FeatureEdge4D &edge : edges) {
-    if (auto line = projectEdge(camera, edge.from, edge.to,
-                                edge.representativeBoundaryAxis)) {
+    if (auto line = projectEdge(camera, edge.from, edge.to, edge.worldAxis)) {
       lines.push_back(*line);
     }
   }
@@ -281,8 +272,7 @@ projectVisibleFeatureEdges(const BlockWorld &world,
   std::vector<Line3> lines;
   lines.reserve(edges.size());
   for (const FeatureEdge4D &edge : edges) {
-    const auto line = projectEdge(camera, edge.from, edge.to,
-                                  edge.representativeBoundaryAxis);
+    const auto line = projectEdge(camera, edge.from, edge.to, edge.worldAxis);
     if (line && hasClearSightline(world, camera, edge)) {
       lines.push_back(*line);
     }

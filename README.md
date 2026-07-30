@@ -33,7 +33,8 @@ feature edges, where at least three boundary orientations meet, remain. Because
 the `y=0` Flat surface is perfectly smooth, the renderer also retains one
 bounded outer guide around that nearby field instead of restoring a cluttered
 internal block grid. Low and Normal render only their generated terrain
-features.
+features. Every edge is colored by the world axis it actually follows: red for
+`X`, green for `Y`, blue for `Z`, and purple for `W`.
 
 ## Build
 
@@ -87,8 +88,9 @@ click a choice with the mouse.
 | Right mouse button | Build beside the targeted tesseract |
 | `Escape` | Quit |
 
-The red, green, and blue arms at the center form the 3D crosshair. Boundary
-wireframes are tinted by which of the four world axes their cubic cell faces.
+The red, green, and blue arms at the center form the 3D crosshair. World
+wireframes use red `X`, green `Y`, blue `Z`, and purple `W` to show the actual
+four-dimensional direction of each edge.
 The top status bar shows live `X`, `Y`, `Z`, and `W` coordinates plus ordinary
 horizontal (`H`), vertical (`V`), and fourth-dimensional (`4D`) view angles in
 degrees. Ground movement and jumping use Hypercraft's terrestrial player

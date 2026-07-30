@@ -447,7 +447,7 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
   }};
   for (const Line3 &line : lines) {
     drawLine3(renderer, display, width, height, line,
-              colors[static_cast<std::size_t>(line.boundaryAxis)]);
+              colors[static_cast<std::size_t>(line.worldAxis)]);
   }
   if (const auto hit = raycast(world, camera.position, camera.forward, 8.0)) {
     for (const Line3 &line : buildTesseractWireframe(hit->block, camera)) {

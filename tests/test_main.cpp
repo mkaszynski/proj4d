@@ -596,6 +596,24 @@ void testOccludedFacesAndSmoothEdgesAreCulled() {
   expect(world.setSolid(first, true), "first isolated tesseract can be built");
   expect(proj4d::buildVisibleBoundaryCells(world, first, 1).size() == 8U,
          "one isolated tesseract exposes eight cubic faces");
+  const auto isolatedEdges = proj4d::buildFeatureEdges(world, first, 1);
+  std::array<bool, 4> representedAxes{};
+  for (const proj4d::FeatureEdge4D &edge : isolatedEdges) {
+    expect(edge.worldAxis >= 0 && edge.worldAxis < 4,
+           "every terrain edge identifies one valid 4D direction");
+    representedAxes[static_cast<std::size_t>(edge.worldAxis)] = true;
+    const proj4d::Vec4 delta = edge.to - edge.from;
+    for (int axis = 0; axis < 4; ++axis) {
+      const double expected = axis == edge.worldAxis ? 1.0 : 0.0;
+      expect(
+          proj4d::nearlyEqual(delta[static_cast<std::size_t>(axis)], expected),
+          "an edge's color axis matches its actual 4D direction");
+    }
+  }
+  expect(std::ranges::all_of(representedAxes,
+                             [](bool present) { return present; }),
+         "an isolated tesseract exposes red X, green Y, blue Z, and purple W "
+         "edge directions");
   expect(world.setSolid(second, true), "neighbor tesseract can be built");
   expect(proj4d::buildVisibleBoundaryCells(world, first, 2).size() == 14U,
          "blocked cubic faces are culled across a 4D chunk boundary");
@@ -617,14 +635,14 @@ void testTerrainOccludesUndergroundCavities() {
   camera.position = {0.5, 1005.0, 0.0, 0.0};
   camera.turnVertical(-proj4d::straightVerticalPitch);
   const std::array<proj4d::FeatureEdge4D, 1> cavityEdge{{
-      {{0.0, 1000.0, 0.0, 0.0}, {1.0, 1000.0, 0.0, 0.0}, 1},
+      {{0.0, 1000.0, 0.0, 0.0}, {1.0, 1000.0, 0.0, 0.0}, 0},
   }};
   expect(proj4d::projectVisibleFeatureEdges(world, cavityEdge, camera).size() ==
              1U,
          "an unobstructed cavity boundary is visible");
 
   const std::array<proj4d::FeatureEdge4D, 1> buriedEdge{{
-      {{0.0, 999.0, 0.0, 0.0}, {1.0, 999.0, 0.0, 0.0}, 1},
+      {{0.0, 999.0, 0.0, 0.0}, {1.0, 999.0, 0.0, 0.0}, 0},
   }};
   expect(proj4d::projectVisibleFeatureEdges(world, buriedEdge, camera).empty(),
          "a solid block hides its own rear boundary");
