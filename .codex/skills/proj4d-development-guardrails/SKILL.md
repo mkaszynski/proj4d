@@ -55,6 +55,10 @@ Apply these invariants to every change in the Proj4D repository.
 - Use `W/S` for forward/backward movement and `A/D` plus `Q/E` for two mutually
   perpendicular level strafing directions. Keep all three directions mutually
   orthogonal and remove keyboard look rotation from `A/D` and `Q/E`.
+- Use held `Z` for Minecraft-style sneaking: lower the real player pose, reduce
+  movement speed to 30 percent, and prevent a grounded player from walking off
+  supported edges along `x`, `z`, or `w`. Preserve Shift exclusively for
+  vertical mouse look.
 - Keep terrestrial player motion synchronized with Hypercraft's authoritative
   baseline: 7-block-per-second walking, gravity 36, a 1.5-block jump setting,
   0.15-block body radius on `x`, `z`, and `w`, 1.65 eye-to-feet and 0.18

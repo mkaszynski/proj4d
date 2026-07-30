@@ -308,6 +308,95 @@ void testPlayerPhysicsMatchesHypercraft() {
          "the 4D body collides after its radius reaches a neighboring w block");
 }
 
+void testPlayerSneaksLikeMinecraft() {
+  expect(proj4d::nearlyEqual(proj4d::playerSneakSpeedMultiplier, 0.3),
+         "sneaking uses Minecraft's 30-percent movement multiplier");
+  expect(proj4d::nearlyEqual(proj4d::playerSneakCollisionBounds.eyeToFeet,
+                             proj4d::playerCollisionBounds.eyeToFeet -
+                                 proj4d::playerSneakEyeDrop),
+         "the sneaking collision body keeps its feet fixed as the eye lowers");
+
+  proj4d::BlockWorld flatWorld(proj4d::TerrainMode::Flat, 3030U);
+  proj4d::Camera4D speedCamera;
+  speedCamera.position = {0.5, 1.0 + proj4d::playerEyeHeight, 0.5, 0.5};
+  const proj4d::Vec4 standingPosition = speedCamera.position;
+  proj4d::PlayerMotionState speedMotion{0.0, true, standingPosition};
+  for (int frame = 0; frame < 60; ++frame) {
+    proj4d::updatePlayerMotion(speedCamera, flatWorld, speedMotion,
+                               {1.0, 0.0, 0.0, true}, false, 1.0 / 60.0);
+  }
+  expect(speedMotion.sneaking, "holding Z keeps the player in the sneak pose");
+  expect(proj4d::nearlyEqual(speedCamera.position.z - standingPosition.z, 2.1,
+                             1.0e-8),
+         "one second of sneaking moves at 30 percent of walking speed");
+  expect(proj4d::nearlyEqual(speedCamera.position.y,
+                             standingPosition.y - proj4d::playerSneakEyeDrop),
+         "sneaking lowers the viewpoint without moving the player's feet");
+  expect(proj4d::playerLowerBodyBlock(speedCamera.position,
+                                      proj4d::playerSneakCollisionBounds) ==
+             proj4d::BlockCoord{0, 1, 2, 0},
+         "the lowered sneak pose retains the correct lower-body block");
+
+  proj4d::updatePlayerMotion(speedCamera, flatWorld, speedMotion, {}, false,
+                             1.0 / 60.0);
+  expect(!speedMotion.sneaking,
+         "releasing Z returns to standing when headroom is clear");
+  expect(proj4d::nearlyEqual(speedCamera.position.y, standingPosition.y),
+         "releasing Z restores the standing viewpoint");
+
+  proj4d::BlockWorld ledgeWorld(proj4d::TerrainMode::Flat, 3031U);
+  for (int w = 0; w <= 3; ++w) {
+    for (int z = 0; z <= 3; ++z) {
+      for (int x = 0; x <= 3; ++x) {
+        if (x != 0 || z != 0 || w != 0) {
+          static_cast<void>(ledgeWorld.setSolid({x, 0, z, w}, false));
+        }
+      }
+    }
+  }
+  proj4d::Camera4D ledgeCamera;
+  ledgeCamera.position = standingPosition;
+  proj4d::PlayerMotionState ledgeMotion{0.0, true, standingPosition};
+  for (int frame = 0; frame < 120; ++frame) {
+    proj4d::updatePlayerMotion(ledgeCamera, ledgeWorld, ledgeMotion,
+                               {1.0, 1.0, 1.0, true}, false, 1.0 / 60.0);
+  }
+  expect(ledgeMotion.grounded,
+         "a sneaking player remains supported at a 4D platform corner");
+  expect(ledgeCamera.position.x < 1.16 && ledgeCamera.position.z < 1.16 &&
+             ledgeCamera.position.w < 1.16,
+         "sneaking prevents walking off x, z, and w edges");
+
+  proj4d::Camera4D walkingCamera;
+  walkingCamera.position = standingPosition;
+  proj4d::PlayerMotionState walkingMotion{0.0, true, standingPosition};
+  for (int frame = 0; frame < 60; ++frame) {
+    proj4d::updatePlayerMotion(walkingCamera, ledgeWorld, walkingMotion,
+                               {1.0, 1.0, 1.0, false}, false, 1.0 / 60.0);
+  }
+  expect(walkingCamera.position.x > 1.16 && walkingCamera.position.z > 1.16 &&
+             walkingCamera.position.w > 1.16,
+         "without Z, ordinary movement can leave the platform");
+  expect(walkingCamera.position.y < standingPosition.y,
+         "walking beyond the unsupported edge allows the player to fall");
+
+  proj4d::BlockWorld headroomWorld(proj4d::TerrainMode::Flat, 3032U);
+  static_cast<void>(headroomWorld.setSolid({0, 3, 0, 0}, true));
+  proj4d::Camera4D headroomCamera;
+  headroomCamera.position = {0.5, 2.55, 0.5, 0.5};
+  proj4d::PlayerMotionState headroomMotion{0.0, false, headroomCamera.position,
+                                           true};
+  proj4d::updatePlayerMotion(headroomCamera, headroomWorld, headroomMotion, {},
+                             false, 0.0);
+  expect(headroomMotion.sneaking,
+         "the player stays crouched when a ceiling blocks standing");
+  static_cast<void>(headroomWorld.setSolid({0, 3, 0, 0}, false));
+  proj4d::updatePlayerMotion(headroomCamera, headroomWorld, headroomMotion, {},
+                             false, 0.0);
+  expect(!headroomMotion.sneaking,
+         "the player stands after releasing Z once headroom is clear");
+}
+
 void testPlayerSlidesAlongBlockedFaces() {
   proj4d::BlockWorld world(31337U);
   for (int y = 2; y <= 4; ++y) {
@@ -709,6 +798,7 @@ int main() {
     testViewStatusReportsFourCoordinatesAndThreeAngles();
     testGroundedPlayerCanMoveWithoutJumping();
     testPlayerPhysicsMatchesHypercraft();
+    testPlayerSneaksLikeMinecraft();
     testPlayerSlidesAlongBlockedFaces();
     testPlayerJumpsOneAndAHalfBlocks();
     testTrueFourDimensionalChunks();

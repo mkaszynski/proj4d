@@ -78,6 +78,7 @@ click a choice with the mouse.
 | `A` / `D` | Move along the first sideways direction, perpendicular to `W` / `S` |
 | `Q` / `E` | Move along the second sideways direction, perpendicular to both other movement directions |
 | `Space` | Jump 1.5 blocks along the world's vertical axis |
+| Hold `Z` | Sneak: crouch, move slowly, and avoid walking off supported edges |
 | `Up` / `Down` | Look up or down, stopping at straight up or straight down |
 | Mouse left / right | Ordinary horizontal look in the 4D world |
 | Mouse up / down | Fourth-dimensional look |
@@ -96,7 +97,8 @@ horizontal (`H`), vertical (`V`), and fourth-dimensional (`4D`) view angles in
 degrees. Ground movement and jumping use Hypercraft's terrestrial player
 physics: a 7-block-per-second walk, 36-block-per-second-squared gravity, a
 1.5-block jump setting, a 0.3-block-wide 4D collision body, collision substeps,
-and axis-separated wall sliding.
+axis-separated wall sliding, and Minecraft-style held-`Z` sneaking across
+`x`, `z`, and `w` ledges.
 
 ## Architecture
 

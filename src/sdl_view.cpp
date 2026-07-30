@@ -550,7 +550,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   const std::string worldName = terrainModeName(*selectedTerrain);
   SDL_SetWindowTitle(window, ("Proj4D | " + worldName +
                               " World | Mouse: 4D look | Shift: vertical | "
-                              "Ctrl: orbit | WASDQE move")
+                              "Ctrl: orbit | Z: sneak | WASDQE move")
                                  .c_str());
   BlockWorld world(*selectedTerrain);
   Camera4D camera;
@@ -577,6 +577,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
               << "  A/D: move along the first sideways direction\n"
               << "  Q/E: move along the second sideways direction\n"
               << "  Space: jump 1.5 blocks\n"
+              << "  Hold Z: sneak and avoid walking off edges\n"
               << "  Up/Down: look up/down (limited to straight up/down)\n"
               << "  Mouse left/right: ordinary horizontal look\n"
               << "  Mouse up/down: fourth-dimensional look\n"
@@ -629,7 +630,10 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
         } else if (event.button.button == SDL_BUTTON_RIGHT) {
           const std::array<BlockCoord, 2> protectedBlocks{{
               containingBlock(camera.position),
-              playerLowerBodyBlock(camera.position),
+              playerLowerBodyBlock(camera.position,
+                                   playerMotion.sneaking
+                                       ? playerSneakCollisionBounds
+                                       : playerCollisionBounds),
           }};
           static_cast<void>(buildAlongRay(
               world, camera.position, camera.forward, 8.0, protectedBlocks));
@@ -645,6 +649,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
             (keys[SDL_SCANCODE_A] != 0 ? 1.0 : 0.0),
         (keys[SDL_SCANCODE_E] != 0 ? 1.0 : 0.0) -
             (keys[SDL_SCANCODE_Q] != 0 ? 1.0 : 0.0),
+        keys[SDL_SCANCODE_Z] != 0,
     };
     constexpr double turnSpeed = 1.25;
     camera.turnVertical(((keys[SDL_SCANCODE_UP] != 0 ? 1.0 : 0.0) -
@@ -664,7 +669,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                                 " | infinite 16^4 chunks | loaded " +
                                 std::to_string(world.loadedChunkCount()) +
                                 " | WASDQE move | Mouse: 4D look | "
-                                "Shift: vertical | Ctrl: orbit";
+                                "Shift: vertical | Z: sneak | Ctrl: orbit";
       SDL_SetWindowTitle(window, title.c_str());
     }
     if (smokeTest && frameCount >= 3) {
