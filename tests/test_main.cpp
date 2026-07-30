@@ -325,7 +325,8 @@ void testPlayerSneaksLikeMinecraft() {
     proj4d::updatePlayerMotion(speedCamera, flatWorld, speedMotion,
                                {1.0, 0.0, 0.0, true}, false, 1.0 / 60.0);
   }
-  expect(speedMotion.sneaking, "holding Z keeps the player in the sneak pose");
+  expect(speedMotion.sneaking,
+         "holding Caps Lock keeps the player in the sneak pose");
   expect(proj4d::nearlyEqual(speedCamera.position.z - standingPosition.z, 2.1,
                              1.0e-8),
          "one second of sneaking moves at 30 percent of walking speed");
@@ -340,9 +341,30 @@ void testPlayerSneaksLikeMinecraft() {
   proj4d::updatePlayerMotion(speedCamera, flatWorld, speedMotion, {}, false,
                              1.0 / 60.0);
   expect(!speedMotion.sneaking,
-         "releasing Z returns to standing when headroom is clear");
+         "releasing Caps Lock returns to standing when headroom is clear");
   expect(proj4d::nearlyEqual(speedCamera.position.y, standingPosition.y),
-         "releasing Z restores the standing viewpoint");
+         "releasing Caps Lock restores the standing viewpoint");
+
+  proj4d::BlockWorld lowWorld(proj4d::TerrainMode::Low);
+  proj4d::Camera4D lowCamera;
+  const int lowSurface = lowWorld.surfaceHeightAt(0, 0, 0);
+  lowCamera.position = {
+      0.5,
+      static_cast<double>(lowSurface + 1) + proj4d::playerEyeHeight,
+      0.5,
+      0.5,
+  };
+  const proj4d::Vec4 lowStart = lowCamera.position;
+  proj4d::PlayerMotionState lowMotion{0.0, true, lowStart};
+  for (int frame = 0; frame < 60; ++frame) {
+    proj4d::updatePlayerMotion(lowCamera, lowWorld, lowMotion,
+                               {1.0, 0.0, 0.0, true}, false, 1.0 / 60.0);
+  }
+  expect(proj4d::nearlyEqual(lowCamera.position.z - lowStart.z, 2.1, 1.0e-8),
+         "held-Caps-Lock movement works at Low's elevated spawn height");
+  expect(!proj4d::playerCollidesAt(lowWorld, lowCamera.position,
+                                   proj4d::playerSneakCollisionBounds),
+         "the lowered Low-world pose does not numerically enter the ground");
 
   proj4d::BlockWorld ledgeWorld(proj4d::TerrainMode::Flat, 3031U);
   for (int w = 0; w <= 3; ++w) {
@@ -376,7 +398,7 @@ void testPlayerSneaksLikeMinecraft() {
   }
   expect(walkingCamera.position.x > 1.16 && walkingCamera.position.z > 1.16 &&
              walkingCamera.position.w > 1.16,
-         "without Z, ordinary movement can leave the platform");
+         "without Caps Lock, ordinary movement can leave the platform");
   expect(walkingCamera.position.y < standingPosition.y,
          "walking beyond the unsupported edge allows the player to fall");
 
@@ -394,7 +416,7 @@ void testPlayerSneaksLikeMinecraft() {
   proj4d::updatePlayerMotion(headroomCamera, headroomWorld, headroomMotion, {},
                              false, 0.0);
   expect(!headroomMotion.sneaking,
-         "the player stands after releasing Z once headroom is clear");
+         "the player stands after releasing Caps Lock once headroom is clear");
 }
 
 void testPlayerSlidesAlongBlockedFaces() {

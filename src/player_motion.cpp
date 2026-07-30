@@ -12,7 +12,9 @@ constexpr double groundProbeDistance = 0.04;
 constexpr double maximumStepDistance = 0.25;
 constexpr double maximumDeltaSeconds = 0.05;
 
-int blockMinimum(double value) { return static_cast<int>(std::floor(value)); }
+int blockMinimum(double value) {
+  return static_cast<int>(std::floor(value + blockMaximumEpsilon));
+}
 
 int blockMaximum(double value) {
   return static_cast<int>(std::floor(value - blockMaximumEpsilon));
