@@ -78,11 +78,11 @@ click a choice with the mouse.
 | `A` / `D` | Move along the first sideways direction, perpendicular to `W` / `S` |
 | `Q` / `E` | Move along the second sideways direction, perpendicular to both other movement directions |
 | `Space` | Jump 1.5 blocks along the world's vertical axis |
-| Hold `Caps Lock` | Sneak: crouch, move slowly, and avoid walking off supported edges |
+| Hold `Shift` | Sneak: crouch, move slowly, and avoid walking off supported edges |
 | `Up` / `Down` | Look up or down, stopping at straight up or straight down |
 | Mouse left / right | Ordinary horizontal look in the 4D world |
 | Mouse up / down | Fourth-dimensional look |
-| Hold `Shift` + mouse movement | Use mouse up/down for vertical look; mouse left/right is ignored |
+| Hold `Tab` + mouse movement | Use mouse up/down for vertical look; mouse left/right is ignored |
 | Hold `Ctrl` + mouse movement | Orbit the solid 3D vision cube without changing the 4D view direction |
 | Mouse wheel | Zoom the external view of the vision cube |
 | Left mouse button | Break the targeted tesseract |
@@ -97,8 +97,8 @@ horizontal (`H`), vertical (`V`), and fourth-dimensional (`4D`) view angles in
 degrees. Ground movement and jumping use Hypercraft's terrestrial player
 physics: a 7-block-per-second walk, 36-block-per-second-squared gravity, a
 1.5-block jump setting, a 0.3-block-wide 4D collision body, collision substeps,
-axis-separated wall sliding, and Minecraft-style held-`Caps Lock` sneaking
-across `x`, `z`, and `w` ledges.
+axis-separated wall sliding, and Minecraft-style held-`Shift` sneaking across
+`x`, `z`, and `w` ledges.
 
 ## Architecture
 

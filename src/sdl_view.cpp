@@ -549,8 +549,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
 
   const std::string worldName = terrainModeName(*selectedTerrain);
   SDL_SetWindowTitle(window, ("Proj4D | " + worldName +
-                              " World | Mouse: 4D look | Shift: vertical | "
-                              "Ctrl: orbit | Caps Lock: sneak | WASDQE move")
+                              " World | Mouse: 4D look | Tab: vertical | "
+                              "Ctrl: orbit | Shift: sneak | WASDQE move")
                                  .c_str());
   BlockWorld world(*selectedTerrain);
   Camera4D camera;
@@ -577,11 +577,11 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
               << "  A/D: move along the first sideways direction\n"
               << "  Q/E: move along the second sideways direction\n"
               << "  Space: jump 1.5 blocks\n"
-              << "  Hold Caps Lock: sneak and avoid walking off edges\n"
+              << "  Hold Shift: sneak and avoid walking off edges\n"
               << "  Up/Down: look up/down (limited to straight up/down)\n"
               << "  Mouse left/right: ordinary horizontal look\n"
               << "  Mouse up/down: fourth-dimensional look\n"
-              << "  Hold Shift + mouse up/down: vertical look\n"
+              << "  Hold Tab + mouse up/down: vertical look\n"
               << "  Hold Ctrl + mouse: orbit the solid 3D vision cube\n"
               << "  Mouse wheel: zoom the vision cube\n"
               << "  Left click: break a targeted tesseract\n"
@@ -607,8 +607,9 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
         running = false;
       } else if (event.type == SDL_MOUSEMOTION && !smokeTest) {
         const SDL_Keymod modifiers = SDL_GetModState();
+        const Uint8 *keys = SDL_GetKeyboardState(nullptr);
         const MouseMotionMode mouseMode = selectMouseMotionMode(
-            (modifiers & KMOD_CTRL) != 0, (modifiers & KMOD_SHIFT) != 0);
+            (modifiers & KMOD_CTRL) != 0, keys[SDL_SCANCODE_TAB] != 0);
         const MouseMotionMapping mouseMotion =
             mapMouseMotion(static_cast<double>(event.motion.xrel),
                            static_cast<double>(event.motion.yrel), mouseMode);
@@ -649,7 +650,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
             (keys[SDL_SCANCODE_A] != 0 ? 1.0 : 0.0),
         (keys[SDL_SCANCODE_E] != 0 ? 1.0 : 0.0) -
             (keys[SDL_SCANCODE_Q] != 0 ? 1.0 : 0.0),
-        keys[SDL_SCANCODE_CAPSLOCK] != 0,
+        keys[SDL_SCANCODE_LSHIFT] != 0 || keys[SDL_SCANCODE_RSHIFT] != 0,
     };
     constexpr double turnSpeed = 1.25;
     camera.turnVertical(((keys[SDL_SCANCODE_UP] != 0 ? 1.0 : 0.0) -
@@ -669,7 +670,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                                 " | infinite 16^4 chunks | loaded " +
                                 std::to_string(world.loadedChunkCount()) +
                                 " | WASDQE move | Mouse: 4D look | "
-                                "Shift: vertical | Caps Lock: sneak | "
+                                "Tab: vertical | Shift: sneak | "
                                 "Ctrl: orbit";
       SDL_SetWindowTitle(window, title.c_str());
     }

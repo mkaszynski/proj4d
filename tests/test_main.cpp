@@ -142,21 +142,24 @@ void testMouseMovementTurnsInOrdinaryAndFourthDimensions() {
           proj4d::nearlyEqual(controlMotion.visionCubePitchTurn, -0.2, 1.0e-8),
       "Ctrl plus mouse retains the original vision-cube orbit");
 
-  const proj4d::MouseMotionMapping shiftMotion = proj4d::mapMouseMotion(
+  const proj4d::MouseMotionMapping tabMotion = proj4d::mapMouseMotion(
       25.0, -50.0, proj4d::MouseMotionMode::VerticalLook);
-  proj4d::Camera4D shiftedCamera;
-  shiftedCamera.turnHorizontal(shiftMotion.worldHorizontalTurn);
-  shiftedCamera.turnVertical(shiftMotion.worldVerticalTurn);
-  shiftedCamera.turnFourth(shiftMotion.worldFourthTurn);
-  expect(proj4d::nearlyEqual(shiftedCamera.horizontalAngle(), 0.0),
-         "Shift plus horizontal mouse movement cannot turn sideways");
-  expect(proj4d::nearlyEqual(shiftedCamera.verticalPitch(), 0.2, 1.0e-8),
-         "Shift plus upward mouse movement looks upward");
-  expect(proj4d::nearlyEqual(shiftedCamera.fourthAngle(), 0.0),
-         "Shift allows only vertical world look");
+  proj4d::Camera4D tabCamera;
+  tabCamera.turnHorizontal(tabMotion.worldHorizontalTurn);
+  tabCamera.turnVertical(tabMotion.worldVerticalTurn);
+  tabCamera.turnFourth(tabMotion.worldFourthTurn);
+  expect(proj4d::nearlyEqual(tabCamera.horizontalAngle(), 0.0),
+         "Tab plus horizontal mouse movement cannot turn sideways");
+  expect(proj4d::nearlyEqual(tabCamera.verticalPitch(), 0.2, 1.0e-8),
+         "Tab plus upward mouse movement looks upward");
+  expect(proj4d::nearlyEqual(tabCamera.fourthAngle(), 0.0),
+         "Tab allows only vertical world look");
+  expect(proj4d::selectMouseMotionMode(false, true) ==
+             proj4d::MouseMotionMode::VerticalLook,
+         "Tab selects vertical mouse look without Ctrl");
   expect(proj4d::selectMouseMotionMode(true, true) ==
              proj4d::MouseMotionMode::VisionCubeOrbit,
-         "Ctrl takes priority over Shift for mouse control");
+         "Ctrl takes priority over Tab for mouse control");
 }
 
 void testCameraProvidesTwoOrthogonalSidewaysDirections() {
@@ -326,7 +329,7 @@ void testPlayerSneaksLikeMinecraft() {
                                {1.0, 0.0, 0.0, true}, false, 1.0 / 60.0);
   }
   expect(speedMotion.sneaking,
-         "holding Caps Lock keeps the player in the sneak pose");
+         "holding Shift keeps the player in the sneak pose");
   expect(proj4d::nearlyEqual(speedCamera.position.z - standingPosition.z, 2.1,
                              1.0e-8),
          "one second of sneaking moves at 30 percent of walking speed");
@@ -341,9 +344,9 @@ void testPlayerSneaksLikeMinecraft() {
   proj4d::updatePlayerMotion(speedCamera, flatWorld, speedMotion, {}, false,
                              1.0 / 60.0);
   expect(!speedMotion.sneaking,
-         "releasing Caps Lock returns to standing when headroom is clear");
+         "releasing Shift returns to standing when headroom is clear");
   expect(proj4d::nearlyEqual(speedCamera.position.y, standingPosition.y),
-         "releasing Caps Lock restores the standing viewpoint");
+         "releasing Shift restores the standing viewpoint");
 
   proj4d::BlockWorld lowWorld(proj4d::TerrainMode::Low);
   proj4d::Camera4D lowCamera;
@@ -361,7 +364,7 @@ void testPlayerSneaksLikeMinecraft() {
                                {1.0, 0.0, 0.0, true}, false, 1.0 / 60.0);
   }
   expect(proj4d::nearlyEqual(lowCamera.position.z - lowStart.z, 2.1, 1.0e-8),
-         "held-Caps-Lock movement works at Low's elevated spawn height");
+         "held-Shift movement works at Low's elevated spawn height");
   expect(!proj4d::playerCollidesAt(lowWorld, lowCamera.position,
                                    proj4d::playerSneakCollisionBounds),
          "the lowered Low-world pose does not numerically enter the ground");
@@ -398,7 +401,7 @@ void testPlayerSneaksLikeMinecraft() {
   }
   expect(walkingCamera.position.x > 1.16 && walkingCamera.position.z > 1.16 &&
              walkingCamera.position.w > 1.16,
-         "without Caps Lock, ordinary movement can leave the platform");
+         "without Shift, ordinary movement can leave the platform");
   expect(walkingCamera.position.y < standingPosition.y,
          "walking beyond the unsupported edge allows the player to fall");
 
@@ -416,7 +419,7 @@ void testPlayerSneaksLikeMinecraft() {
   proj4d::updatePlayerMotion(headroomCamera, headroomWorld, headroomMotion, {},
                              false, 0.0);
   expect(!headroomMotion.sneaking,
-         "the player stands after releasing Caps Lock once headroom is clear");
+         "the player stands after releasing Shift once headroom is clear");
 }
 
 void testPlayerSlidesAlongBlockedFaces() {

@@ -19,7 +19,7 @@ struct MouseMotionMapping {
 };
 
 [[nodiscard]] MouseMotionMode selectMouseMotionMode(bool controlHeld,
-                                                    bool shiftHeld);
+                                                    bool verticalLookHeld);
 [[nodiscard]] MouseMotionMapping mapMouseMotion(double horizontalPixels,
                                                 double verticalPixels,
                                                 MouseMotionMode mode);

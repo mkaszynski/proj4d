@@ -2,11 +2,11 @@
 
 namespace proj4d {
 
-MouseMotionMode selectMouseMotionMode(bool controlHeld, bool shiftHeld) {
+MouseMotionMode selectMouseMotionMode(bool controlHeld, bool verticalLookHeld) {
   if (controlHeld) {
     return MouseMotionMode::VisionCubeOrbit;
   }
-  if (shiftHeld) {
+  if (verticalLookHeld) {
     return MouseMotionMode::VerticalLook;
   }
   return MouseMotionMode::FourthDimensionalLook;
