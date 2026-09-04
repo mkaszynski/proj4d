@@ -1,6 +1,6 @@
 ---
 name: proj4d-development-guardrails
-description: Preserve Proj4D's infinite true four-spatial-dimensional C++ world, 16x16x16x16 chunks, selectable superflat and original density terrain, projected 3D vision, bounded streaming performance, tests, and public-repository privacy. Use whenever creating, changing, debugging, reviewing, testing, or releasing the Proj4D repository.
+description: Preserve Proj4D's infinite true 4D and 2D C++ worlds, dimension-correct chunks, selectable Flat, Low, and High terrain, native 4D-to-3D and 2D-to-1D vision, bounded streaming performance, tests, and public-repository privacy. Use whenever creating, changing, debugging, reviewing, testing, or releasing the Proj4D repository.
 ---
 
 # Proj4D Development Guardrails
@@ -9,13 +9,17 @@ Apply these invariants to every change in the Proj4D repository.
 
 ## Preserve the Game
 
-- Keep all world coordinates, blocks, camera state, targeting, collision, and
-  interactions genuinely four-dimensional.
-- Keep the world unbounded and procedurally generated in all four axes.
-- Keep the real world unit as a `16x16x16x16` chunk with explicit 4D chunk and
-  local coordinates, including correct floor division for negative positions.
-- Present a startup menu before world creation with `Flat`, `Low`, and `Normal`
-  choices. Support keyboard and mouse selection.
+- Keep 4D mode genuinely four-dimensional and 2D mode genuinely
+  two-dimensional across coordinates, blocks, cameras, targeting, collision,
+  and interactions. Never implement 2D as a fixed camera over the 4D world.
+- Keep both worlds unbounded horizontally and procedurally generated. Keep
+  terrain infinitely deep along negative `y`.
+- Keep the real 4D world unit as a `16x16x16x16` chunk and the real 2D world
+  unit as a `16x16` chunk, with explicit dimension-correct chunk and local
+  coordinates and correct floor division for negative positions.
+- Present a dimension menu with `4D` and `2D` before world creation, followed
+  by a terrain menu with `Flat`, `Low`, and `High`. Support keyboard and mouse
+  selection in both menus.
 - Generate `Flat` as a four-dimensional superflat field: every block at
   `y <= 0` is solid, every block at `y > 0` is air, and the field is unbounded
   across `x`, `z`, and `w` and infinitely deep.
@@ -24,8 +28,11 @@ Apply these invariants to every change in the Proj4D repository.
   surface around the `y = 18` base level, but exclude caves, trees, ores,
   fluids, biome layers, and other decorations. Keep it unbounded across `x`,
   `z`, and `w` and infinitely deep.
-- Generate `Normal` with the original deterministic seeded four-dimensional
-  density and noise terrain through `TerrainMode::Density`.
+- Generate `High` with the original deterministic seeded four-dimensional
+  density and noise terrain through `TerrainMode::Density`. Retain
+  `--normal-smoke-test` only as a compatibility command name.
+- Generate each 2D terrain as the exact `z=0, w=0` cross-section of the
+  corresponding 4D generator, with only `x` and vertical `y` in the world.
 - Represent each block as a tesseract with eight cubic boundary cells.
 - Render a native 4D perspective view into a solid 3D vision volume. Do not
   replace the view with 3D slices, independent 3D worlds, or fake depth.
@@ -36,7 +43,7 @@ Apply these invariants to every change in the Proj4D repository.
   projection.
 - Keep the perfectly smooth `y=0` Flat surface legible with one bounded outer
   wireframe guide around the local render region. Never add that guide to Low
-  or Normal; render their generated terrain feature edges. Do not restore
+  or High; render their generated terrain feature edges. Do not restore
   internal grid lines between smoothly joined surface cells.
 - Color each world edge by the 4D axis it actually follows: red `X`, green `Y`,
   blue `Z`, and purple `W`. Do not choose a color from an incident face or
@@ -64,12 +71,36 @@ Apply these invariants to every change in the Proj4D repository.
   eye-to-head bounds, a 50-millisecond delta cap, 0.25-block collision
   substeps, and axis-separated 4D wall sliding.
 
+## Preserve True 2D Vision and Play
+
+- Render 2D mode through a native 2D perspective camera into a 1D first-person
+  view. Never replace it with a side-on platformer, overhead camera, or 4D
+  slice.
+- Display the 1D view as a vertical strip spanning the screen height, centered
+  horizontally, with width equal to one tenth of its height. Projected square
+  sides must form readable rectangular intervals within this strip.
+- Trace each displayed 1D sample through the 2D block grid and show only its
+  nearest solid boundary. Never reveal rear blocks or underground cavities
+  through nearer terrain.
+- Color each visible boundary interval by the world direction along which it
+  runs: red `X` and green `Y`. Keep the center targeting mark visible.
+- Map vertical mouse motion to vertical 2D look, ignore horizontal mouse
+  motion, and clamp look at straight up and straight down. Use `Z` to reverse
+  the horizontal view and forward direction.
+- Use `W/S` for forward/backward movement, `Space` for jumping, and held
+  `Shift` for sneaking. Apply the exact same speed, gravity, jump height,
+  vertical body bounds, radius, delta clamp, collision substeps, wall sliding,
+  and sneak behavior as 4D mode, interpreted in `x/y`.
+- Route 2D building and breaking through exact 2D grid traversal and the
+  chunk-backed 2D world. Protect occupied player cells from placement.
+
 ## Keep Ownership Clear
 
 - Keep game and projection truth in portable C++.
 - Let the SDL layer own only platform input, windowing, and final drawing.
-- Route building and breaking through chunk-backed world APIs and exact 4D grid
-  ray traversal. Preserve edits across chunk eviction and regeneration.
+- Route building and breaking through dimension-correct chunk-backed world
+  APIs and exact grid traversal. Preserve edits across chunk eviction and
+  regeneration.
 - Avoid duplicated simulation or projection rules in presentation code.
 
 ## Protect Performance and Correctness
@@ -82,13 +113,14 @@ Apply these invariants to every change in the Proj4D repository.
   evidence.
 - Cache topology extraction independently from camera projection so ordinary
   look rotation does not regenerate chunks or rescan blocks.
-- Add tests for every behavior change, especially 4D basis orthogonality,
-  negative chunk math, menu mode routing, the flat `y=0` boundary across
-  distant `x/z/w` coordinates, Low golden parity with Hypercraft Flat, Normal
-  density determinism, deep terrain, chunk boundaries, occluded-face culling,
-  cache limits, edit survival, projection clipping, and ray interaction.
+- Add tests for every behavior change, especially both chunk layouts, 4D basis
+  orthogonality, 2D pitch and direction, negative chunk math, menu routing,
+  Flat boundaries, Low golden parity with Hypercraft Flat, High density
+  determinism, exact 2D terrain cross-sections, deep terrain, occlusion, cache
+  limits, edit survival, both projections, shared physics, and ray interaction.
 - Run the complete build, CTest suite, and headless graphical smoke tests for
-  the menu, Flat, Low, and Normal before handoff.
+  the dimension menu, both terrain menus, and Flat, Low, and High in both 4D
+  and 2D before handoff.
 - Treat broken native frame rate or unbounded geometry growth as regressions.
 
 ## Keep the Repository Public-Safe

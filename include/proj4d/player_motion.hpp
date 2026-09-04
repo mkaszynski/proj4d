@@ -18,6 +18,10 @@ inline constexpr double playerGravity = 36.0;
 inline constexpr double playerJumpHeight = 1.5;
 inline constexpr double playerSneakSpeedMultiplier = 0.3;
 inline constexpr double playerSneakEyeDrop = 0.3;
+inline constexpr double playerCollisionEpsilon = 0.0001;
+inline constexpr double playerGroundProbeDistance = 0.04;
+inline constexpr double playerMaximumStepDistance = 0.25;
+inline constexpr double playerMaximumDeltaSeconds = 0.05;
 inline constexpr PlayerCollisionBounds playerSneakCollisionBounds{
     playerCollisionBounds.radius,
     playerCollisionBounds.eyeToFeet - playerSneakEyeDrop,

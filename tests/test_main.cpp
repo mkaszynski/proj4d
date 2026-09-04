@@ -7,13 +7,17 @@
 #include <string>
 
 #include "proj4d/camera.hpp"
+#include "proj4d/camera2d.hpp"
 #include "proj4d/chunk.hpp"
 #include "proj4d/mouse_input.hpp"
 #include "proj4d/player_motion.hpp"
+#include "proj4d/player_motion2d.hpp"
+#include "proj4d/render2d.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/terrain_generator.hpp"
 #include "proj4d/view_status.hpp"
 #include "proj4d/world.hpp"
+#include "proj4d/world2d.hpp"
 
 namespace {
 
@@ -513,6 +517,189 @@ void testTrueFourDimensionalChunks() {
          "neighboring w coordinate remains independent");
 }
 
+void testTrueTwoDimensionalWorldAndChunks() {
+  expect(proj4d::chunkSize2D == 16, "each 2D chunk axis is 16 blocks");
+  expect(proj4d::chunkVolume2D == 16 * 16,
+         "2D chunks contain exactly 16x16 squares");
+  expect(proj4d::chunkCoordForBlock(proj4d::BlockCoord2D{-1, -17}) ==
+             proj4d::ChunkCoord2D{-1, -2},
+         "negative 2D positions use floor division");
+  expect(proj4d::localCoordForBlock(proj4d::BlockCoord2D{-1, -17}) ==
+             proj4d::LocalBlockCoord2D{15, 15},
+         "negative 2D positions map into positive local coordinates");
+  expect(proj4d::localBlockIndex(proj4d::LocalBlockCoord2D{15, 15}) == 255U,
+         "both 2D axes contribute to chunk storage");
+
+  proj4d::Chunk2D chunk({2, -1});
+  chunk.setSolid({15, 2}, true);
+  expect(chunk.isSolid({15, 2}), "a 2D chunk stores a square");
+  expect(!chunk.isSolid({14, 2}),
+         "neighboring 2D chunk cells remain independent");
+
+  constexpr std::array modes{
+      proj4d::TerrainMode::Flat,
+      proj4d::TerrainMode::Low,
+      proj4d::TerrainMode::Density,
+  };
+  constexpr std::array<int, 7> xCoordinates{-64, -17, 0, 8, 31, 64, 129};
+  for (const proj4d::TerrainMode mode : modes) {
+    const proj4d::TerrainGenerator generator4D(2468U, mode);
+    const proj4d::TerrainGenerator2D generator2D(2468U, mode);
+    for (const int x : xCoordinates) {
+      expect(generator2D.surfaceHeightAt(x) ==
+                 generator4D.surfaceHeightAt(x, 0, 0),
+             "2D terrain is the exact z=0,w=0 cross-section of its 4D mode");
+      for (int y = -8; y <= 32; y += 4) {
+        expect(generator2D.generatedSolidAt({x, y}) ==
+                   generator4D.generatedSolidAt({x, y, 0, 0}),
+               "2D terrain solidity matches the selected 4D generator");
+      }
+    }
+  }
+
+  proj4d::BlockWorld2D world(proj4d::TerrainMode::Low, 2468U, 2U);
+  static_cast<void>(world.isSolid({0, 0}));
+  static_cast<void>(world.isSolid({32, 0}));
+  static_cast<void>(world.isSolid({64, 0}));
+  expect(world.loadedChunkCount() <= world.maximumLoadedChunks(),
+         "the infinite 2D chunk cache stays bounded");
+  const proj4d::BlockCoord2D edit{1000000, 1000};
+  const bool generated = world.generatedSolidAt(edit);
+  expect(world.setSolid(edit, !generated), "a distant 2D block can be edited");
+  static_cast<void>(world.isSolid({-96, 0}));
+  expect(world.isSolid(edit) == !generated,
+         "2D edits survive chunk eviction and regeneration");
+}
+
+void testTrueTwoDimensionalProjection() {
+  expect(proj4d::visionLineWidthDivisor == 10,
+         "the vertical 1D view strip is ten times thinner than it is tall");
+  proj4d::Camera2D camera;
+  camera.position = {0.5, 2.5};
+  const auto center = camera.project({2.5, 2.5});
+  expect(center && proj4d::nearlyEqual(center->position, 0.0),
+         "a point straight ahead projects to the center of the 1D view");
+  const auto above = camera.project({2.5, 3.5});
+  expect(above && above->position > 0.0,
+         "vertical displacement maps along the projected 1D image");
+  camera.turnVertical(10.0);
+  expect(proj4d::nearlyEqual(camera.verticalPitch(),
+                             proj4d::straightVerticalPitch),
+         "2D mouse look stops at straight up");
+  camera.turnVertical(-20.0);
+  expect(proj4d::nearlyEqual(camera.verticalPitch(),
+                             -proj4d::straightVerticalPitch),
+         "2D mouse look stops at straight down");
+  camera.reverseHorizontalView();
+  expect(camera.horizontalDirection() == -1 && camera.movementForward().x < 0.0,
+         "Z reverses the 2D view and forward movement direction");
+
+  proj4d::BlockWorld2D sideWorld(proj4d::TerrainMode::Flat, 4100U);
+  static_cast<void>(sideWorld.setSolid({0, 100}, true));
+  static_cast<void>(sideWorld.setSolid({2, 100}, true));
+  proj4d::Camera2D sideCamera;
+  sideCamera.position = {-2.0, 100.5};
+  const auto sideTarget = proj4d::raycast(sideWorld, sideCamera.position,
+                                          sideCamera.forward(), 8.0);
+  const auto sideLine = proj4d::buildVisionLine(
+      sideWorld, sideCamera, 101, 8.0,
+      sideTarget ? std::optional(sideTarget->block) : std::nullopt);
+  expect(sideLine[50].solid && sideLine[50].worldAxis == 1,
+         "an X-facing block side renders as a green Y edge interval");
+  expect(sideLine[50].block == proj4d::BlockCoord2D{0, 100},
+         "the nearest 2D square hides a farther square on the same sightline");
+  expect(sideLine[50].targeted, "the center ray marks the targeted 2D block");
+  expect(std::count_if(sideLine.begin(), sideLine.end(),
+                       [](const proj4d::VisionSample2D &sample) {
+                         return sample.targeted;
+                       }) > 1,
+         "a projected 2D square side occupies a readable rectangular interval");
+
+  proj4d::BlockWorld2D floorWorld(proj4d::TerrainMode::Flat, 4101U);
+  static_cast<void>(floorWorld.setSolid({0, 100}, true));
+  proj4d::Camera2D floorCamera;
+  floorCamera.position = {0.5, 98.0};
+  floorCamera.turnVertical(proj4d::straightVerticalPitch);
+  const auto floorLine =
+      proj4d::buildVisionLine(floorWorld, floorCamera, 101, 8.0);
+  expect(floorLine[50].solid && floorLine[50].worldAxis == 0,
+         "a Y-facing block side renders as a red X edge interval");
+}
+
+void testTwoDimensionalPhysicsAndInteraction() {
+  proj4d::BlockWorld2D world(proj4d::TerrainMode::Flat, 4200U);
+  proj4d::Camera2D camera;
+  camera.position = {0.5, 1.0 + proj4d::playerEyeHeight};
+  const proj4d::Vec2 start = camera.position;
+  proj4d::PlayerMotionState2D motion{0.0, true, start};
+  for (int frame = 0; frame < 60; ++frame) {
+    proj4d::updatePlayerMotion(camera, world, motion, {1.0, false}, false,
+                               1.0 / 60.0);
+  }
+  expect(proj4d::nearlyEqual(camera.position.x - start.x,
+                             proj4d::playerWalkSpeed, 1.0e-8),
+         "2D walking uses the exact 4D movement speed");
+
+  camera.reverseHorizontalView();
+  for (int frame = 0; frame < 60; ++frame) {
+    proj4d::updatePlayerMotion(camera, world, motion, {1.0, false}, false,
+                               1.0 / 60.0);
+  }
+  expect(proj4d::nearlyEqual(camera.position.x, start.x, 1.0e-8),
+         "W follows the opposite horizontal direction after pressing Z");
+
+  double maximumEyeY = camera.position.y;
+  proj4d::updatePlayerMotion(camera, world, motion, {}, true, 1.0 / 120.0);
+  for (int step = 1; step < 240 && !motion.grounded; ++step) {
+    proj4d::updatePlayerMotion(camera, world, motion, {}, false, 1.0 / 120.0);
+    maximumEyeY = std::max(maximumEyeY, camera.position.y);
+  }
+  expect(proj4d::nearlyEqual(maximumEyeY - start.y, proj4d::playerJumpHeight,
+                             0.16),
+         "2D jumping uses the exact 4D jump height and gravity");
+
+  proj4d::Camera2D sneakCamera;
+  sneakCamera.position = start;
+  proj4d::PlayerMotionState2D sneakMotion{0.0, true, start};
+  for (int frame = 0; frame < 60; ++frame) {
+    proj4d::updatePlayerMotion(sneakCamera, world, sneakMotion, {1.0, true},
+                               false, 1.0 / 60.0);
+  }
+  expect(proj4d::nearlyEqual(sneakCamera.position.x - start.x, 2.1, 1.0e-8) &&
+             proj4d::nearlyEqual(sneakCamera.position.y,
+                                 start.y - proj4d::playerSneakEyeDrop),
+         "2D Shift sneaking matches 4D speed and eye height");
+
+  proj4d::BlockWorld2D ledge(proj4d::TerrainMode::Flat, 4201U);
+  for (int x = 1; x <= 4; ++x) {
+    static_cast<void>(ledge.setSolid({x, 0}, false));
+  }
+  proj4d::Camera2D edgeCamera;
+  edgeCamera.position = start;
+  proj4d::PlayerMotionState2D edgeMotion{0.0, true, start};
+  for (int frame = 0; frame < 120; ++frame) {
+    proj4d::updatePlayerMotion(edgeCamera, ledge, edgeMotion, {1.0, true},
+                               false, 1.0 / 60.0);
+  }
+  expect(edgeCamera.position.x < 1.16 && edgeMotion.grounded,
+         "2D Shift sneaking prevents walking off an X ledge");
+
+  proj4d::BlockWorld2D interactionWorld(proj4d::TerrainMode::Flat, 4202U);
+  static_cast<void>(interactionWorld.setSolid({3, 100}, true));
+  const proj4d::Vec2 origin{0.5, 100.5};
+  const proj4d::Vec2 right{1.0, 0.0};
+  const auto hit = proj4d::raycast(interactionWorld, origin, right, 8.0);
+  expect(hit && hit->block == proj4d::BlockCoord2D{3, 100} &&
+             hit->placement == proj4d::BlockCoord2D{2, 100},
+         "2D ray traversal finds its block and build position");
+  const std::array<proj4d::BlockCoord2D, 0> noProtectedBlocks{};
+  expect(proj4d::buildAlongRay(interactionWorld, origin, right, 8.0,
+                               noProtectedBlocks),
+         "2D right click can build beside the target");
+  expect(proj4d::breakAlongRay(interactionWorld, origin, right, 8.0),
+         "2D left click can break the nearest target");
+}
+
 void testFlatTerrainAndPreservedDensityFunctions() {
   const proj4d::TerrainGenerator first(12345U);
   const proj4d::TerrainGenerator same(12345U);
@@ -652,15 +839,15 @@ void testBlockWorldUsesTheSelectedTerrainMode() {
   constexpr std::uint32_t seed = 424242U;
   proj4d::BlockWorld flat(proj4d::TerrainMode::Flat, seed, 4U);
   proj4d::BlockWorld low(proj4d::TerrainMode::Low, seed, 4U);
-  proj4d::BlockWorld normal(proj4d::TerrainMode::Density, seed, 4U);
+  proj4d::BlockWorld high(proj4d::TerrainMode::Density, seed, 4U);
   const proj4d::TerrainGenerator original(seed, proj4d::TerrainMode::Density);
 
   expect(flat.terrainMode() == proj4d::TerrainMode::Flat,
          "Flat menu choice creates a flat BlockWorld");
   expect(low.terrainMode() == proj4d::TerrainMode::Low,
          "Low menu choice creates a Hypercraft Flat BlockWorld");
-  expect(normal.terrainMode() == proj4d::TerrainMode::Density,
-         "Normal menu choice creates a density BlockWorld");
+  expect(high.terrainMode() == proj4d::TerrainMode::Density,
+         "High menu choice creates a density BlockWorld");
   expect(!flat.generatedSolidAt({0, 18, 0, 0}) &&
              low.generatedSolidAt({0, 18, 0, 0}),
          "Flat and Low choices preserve their distinct terrain generators");
@@ -670,17 +857,17 @@ void testBlockWorldUsesTheSelectedTerrainMode() {
     for (int z = -4; z <= 4 && !modesDiffer; z += 2) {
       for (int y = -12; y <= 16 && !modesDiffer; ++y) {
         const proj4d::BlockCoord sample{2, y, z, w};
-        expect(normal.generatedSolidAt(sample) ==
+        expect(high.generatedSolidAt(sample) ==
                    original.generatedSolidAt(sample),
-               "Normal world uses the retained original terrain function");
+               "High world uses the retained original terrain function");
         modesDiffer =
-            flat.generatedSolidAt(sample) != normal.generatedSolidAt(sample);
+            flat.generatedSolidAt(sample) != high.generatedSolidAt(sample);
       }
     }
   }
-  expect(modesDiffer, "Flat and Normal menu choices create different terrain");
-  expect(normal.surfaceHeightAt(0, 0, 0) == original.surfaceHeightAt(0, 0, 0),
-         "Normal world uses the original surface search");
+  expect(modesDiffer, "Flat and High menu choices create different terrain");
+  expect(high.surfaceHeightAt(0, 0, 0) == original.surfaceHeightAt(0, 0, 0),
+         "High world uses the original surface search");
 }
 
 void testInfiniteWorldCacheAndEdits() {
@@ -827,6 +1014,9 @@ int main() {
     testPlayerSlidesAlongBlockedFaces();
     testPlayerJumpsOneAndAHalfBlocks();
     testTrueFourDimensionalChunks();
+    testTrueTwoDimensionalWorldAndChunks();
+    testTrueTwoDimensionalProjection();
+    testTwoDimensionalPhysicsAndInteraction();
     testFlatTerrainAndPreservedDensityFunctions();
     testLowTerrainMatchesHypercraftFlat();
     testBlockWorldUsesTheSelectedTerrainMode();

@@ -12,17 +12,32 @@ int main(int argc, char **argv) {
       mode = proj4d::RunMode::FlatSmokeTest;
     } else if (argument == "--low-smoke-test") {
       mode = proj4d::RunMode::LowSmokeTest;
-    } else if (argument == "--normal-smoke-test") {
-      mode = proj4d::RunMode::NormalSmokeTest;
+    } else if (argument == "--high-smoke-test" ||
+               argument == "--normal-smoke-test") {
+      mode = proj4d::RunMode::HighSmokeTest;
     } else if (argument == "--menu-smoke-test") {
       mode = proj4d::RunMode::MenuSmokeTest;
+    } else if (argument == "--4d-terrain-menu-smoke-test") {
+      mode = proj4d::RunMode::FourDTerrainMenuSmokeTest;
+    } else if (argument == "--2d-terrain-menu-smoke-test") {
+      mode = proj4d::RunMode::TwoDTerrainMenuSmokeTest;
+    } else if (argument == "--2d-smoke-test") {
+      mode = proj4d::RunMode::TwoDFlatSmokeTest;
+    } else if (argument == "--2d-low-smoke-test") {
+      mode = proj4d::RunMode::TwoDLowSmokeTest;
+    } else if (argument == "--2d-high-smoke-test") {
+      mode = proj4d::RunMode::TwoDHighSmokeTest;
     } else if (argument == "--smoke-output" && index + 1 < argc) {
       smokeOutput = argv[++index];
     } else if (argument == "--help") {
-      std::cout << "Proj4D - a true projected 4D block world\n\n"
+      std::cout << "Proj4D - true projected 4D and 2D block worlds\n\n"
                 << "Usage: proj4d [--smoke-test | --low-smoke-test | "
-                   "--normal-smoke-test | --menu-smoke-test]\n"
-                << "              [--smoke-output FILE]\n";
+                   "--high-smoke-test | --2d-smoke-test | "
+                   "--2d-low-smoke-test | --2d-high-smoke-test | "
+                   "--menu-smoke-test | --4d-terrain-menu-smoke-test | "
+                   "--2d-terrain-menu-smoke-test]\n"
+                << "              [--smoke-output FILE]\n"
+                << "Alias: --normal-smoke-test selects 4D High terrain.\n";
       return 0;
     } else {
       std::cerr << "Unknown argument: " << argument << '\n';

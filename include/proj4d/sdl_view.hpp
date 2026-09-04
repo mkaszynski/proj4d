@@ -8,8 +8,13 @@ enum class RunMode {
   Interactive,
   FlatSmokeTest,
   LowSmokeTest,
-  NormalSmokeTest,
+  HighSmokeTest,
   MenuSmokeTest,
+  FourDTerrainMenuSmokeTest,
+  TwoDTerrainMenuSmokeTest,
+  TwoDFlatSmokeTest,
+  TwoDLowSmokeTest,
+  TwoDHighSmokeTest,
 };
 
 int runApplication(RunMode mode, const std::string &smokeOutput);

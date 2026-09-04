@@ -7,23 +7,18 @@ namespace proj4d {
 
 namespace {
 
-constexpr double blockMaximumEpsilon = 0.0001;
-constexpr double groundProbeDistance = 0.04;
-constexpr double maximumStepDistance = 0.25;
-constexpr double maximumDeltaSeconds = 0.05;
-
 int blockMinimum(double value) {
-  return static_cast<int>(std::floor(value + blockMaximumEpsilon));
+  return static_cast<int>(std::floor(value + playerCollisionEpsilon));
 }
 
 int blockMaximum(double value) {
-  return static_cast<int>(std::floor(value - blockMaximumEpsilon));
+  return static_cast<int>(std::floor(value - playerCollisionEpsilon));
 }
 
 bool hasGroundContact(const BlockWorld &world, const Vec4 &eyePosition,
                       PlayerCollisionBounds bounds) {
   Vec4 probe = eyePosition;
-  probe.y -= groundProbeDistance;
+  probe.y -= playerGroundProbeDistance;
   return playerCollidesAt(world, probe, bounds);
 }
 
@@ -57,7 +52,8 @@ Vec4 resolvePlayerMotionWithEdgeProtection(const BlockWorld &world,
       std::max({std::abs(desiredMotion.x), std::abs(desiredMotion.y),
                 std::abs(desiredMotion.z), std::abs(desiredMotion.w)});
   const int steps = std::max(
-      1, static_cast<int>(std::ceil(maximumMotion / maximumStepDistance)));
+      1,
+      static_cast<int>(std::ceil(maximumMotion / playerMaximumStepDistance)));
   const Vec4 stepMotion = desiredMotion * (1.0 / static_cast<double>(steps));
   Vec4 acceptedTotal{};
   Vec4 currentEye = eyePosition;
@@ -93,7 +89,7 @@ BlockCoord playerLowerBodyBlock(const Vec4 &eyePosition,
                                 PlayerCollisionBounds bounds) {
   return containingBlock({
       eyePosition.x,
-      eyePosition.y - bounds.eyeToFeet + blockMaximumEpsilon,
+      eyePosition.y - bounds.eyeToFeet + playerCollisionEpsilon,
       eyePosition.z,
       eyePosition.w,
   });
@@ -138,7 +134,7 @@ Vec4 resolvePlayerMotion(const BlockWorld &world, const Vec4 &eyePosition,
 void updatePlayerMotion(Camera4D &camera, const BlockWorld &world,
                         PlayerMotionState &state, PlayerMoveInput moveInput,
                         bool jumpInput, double deltaSeconds) {
-  deltaSeconds = std::clamp(deltaSeconds, 0.0, maximumDeltaSeconds);
+  deltaSeconds = std::clamp(deltaSeconds, 0.0, playerMaximumDeltaSeconds);
   updateSneakPose(camera, world, state, moveInput.sneak);
   const PlayerCollisionBounds activeBounds =
       state.sneaking ? playerSneakCollisionBounds : playerCollisionBounds;
@@ -155,7 +151,8 @@ void updatePlayerMotion(Camera4D &camera, const BlockWorld &world,
        std::abs((state.verticalVelocity - playerGravity * deltaSeconds) *
                 deltaSeconds)});
   const int steps = std::max(
-      1, static_cast<int>(std::ceil(maximumMotion / maximumStepDistance)));
+      1,
+      static_cast<int>(std::ceil(maximumMotion / playerMaximumStepDistance)));
 
   for (int step = 0; step < steps; ++step) {
     const double stepDelta = deltaSeconds / static_cast<double>(steps);

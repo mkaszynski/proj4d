@@ -23,13 +23,23 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: Headless graphical smoke tests
         run: |
-          ./build/proj4d --menu-smoke-test --smoke-output build/proj4d-menu.bmp
-          ./build/proj4d --smoke-test --smoke-output build/proj4d-flat.bmp
-          ./build/proj4d --low-smoke-test --smoke-output build/proj4d-low.bmp
-          ./build/proj4d --normal-smoke-test --smoke-output build/proj4d-normal.bmp
+          ./build/proj4d --menu-smoke-test --smoke-output build/dimension-menu.bmp
+          ./build/proj4d --4d-terrain-menu-smoke-test --smoke-output build/4d-terrain-menu.bmp
+          ./build/proj4d --2d-terrain-menu-smoke-test --smoke-output build/2d-terrain-menu.bmp
+          ./build/proj4d --smoke-test --smoke-output build/4d-flat.bmp
+          ./build/proj4d --low-smoke-test --smoke-output build/4d-low.bmp
+          ./build/proj4d --high-smoke-test --smoke-output build/4d-high.bmp
+          ./build/proj4d --2d-smoke-test --smoke-output build/2d-flat.bmp
+          ./build/proj4d --2d-low-smoke-test --smoke-output build/2d-low.bmp
+          ./build/proj4d --2d-high-smoke-test --smoke-output build/2d-high.bmp
       - name: Verify smoke images
         run: |
-          test -s build/proj4d-menu.bmp
-          test -s build/proj4d-flat.bmp
-          test -s build/proj4d-low.bmp
-          test -s build/proj4d-normal.bmp
+          test -s build/dimension-menu.bmp
+          test -s build/4d-terrain-menu.bmp
+          test -s build/2d-terrain-menu.bmp
+          test -s build/4d-flat.bmp
+          test -s build/4d-low.bmp
+          test -s build/4d-high.bmp
+          test -s build/2d-flat.bmp
+          test -s build/2d-low.bmp
+          test -s build/2d-high.bmp

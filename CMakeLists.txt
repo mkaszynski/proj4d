@@ -15,14 +15,18 @@ endif()
 
 add_library(proj4d_core
     src/camera.cpp
+    src/camera2d.cpp
     src/chunk.cpp
     src/coordinates.cpp
     src/mouse_input.cpp
     src/player_motion.cpp
+    src/player_motion2d.cpp
     src/render_geometry.cpp
+    src/render2d.cpp
     src/terrain_generator.cpp
     src/view_status.cpp
     src/world.cpp
+    src/world2d.cpp
 )
 target_include_directories(proj4d_core PUBLIC include)
 target_compile_features(proj4d_core PUBLIC cxx_std_20)
