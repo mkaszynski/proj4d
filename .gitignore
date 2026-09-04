@@ -3,4 +3,4 @@
 /compile_commands.json
 *.bmp
 *.log
-
+*.p4world*

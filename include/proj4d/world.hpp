@@ -18,6 +18,11 @@ struct RayHit {
   double distance{};
 };
 
+struct BlockEdit {
+  BlockCoord coordinate{};
+  bool solid{};
+};
+
 class BlockWorld {
 public:
   explicit BlockWorld(std::uint32_t seed = 0x4D2026U,
@@ -34,6 +39,8 @@ public:
   [[nodiscard]] std::size_t loadedChunkCount() const;
   [[nodiscard]] std::size_t maximumLoadedChunks() const;
   [[nodiscard]] std::uint64_t revision() const;
+  [[nodiscard]] std::vector<BlockEdit> edits() const;
+  void replaceEdits(std::span<const BlockEdit> edits);
 
 private:
   struct CachedChunk {

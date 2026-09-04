@@ -27,6 +27,7 @@ add_library(proj4d_core
     src/view_status.cpp
     src/world.cpp
     src/world2d.cpp
+    src/world_save.cpp
 )
 target_include_directories(proj4d_core PUBLIC include)
 target_compile_features(proj4d_core PUBLIC cxx_std_20)

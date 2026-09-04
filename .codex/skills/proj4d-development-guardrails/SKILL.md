@@ -1,6 +1,6 @@
 ---
 name: proj4d-development-guardrails
-description: Preserve Proj4D's infinite true 4D and 2D C++ worlds, dimension-correct chunks, selectable Flat, Low, and High terrain, native 4D-to-3D and 2D-to-1D vision, bounded streaming performance, tests, and public-repository privacy. Use whenever creating, changing, debugging, reviewing, testing, or releasing the Proj4D repository.
+description: Preserve Proj4D's infinite true 4D world with shared persistent 2D slice play, real 16x16x16x16 chunks, Flat/Low/High saves, native 4D-to-3D and 2D-to-1D vision, bounded streaming performance, tests, and public-repository privacy. Use whenever creating, changing, debugging, reviewing, testing, or releasing the Proj4D repository.
 ---
 
 # Proj4D Development Guardrails
@@ -14,9 +14,9 @@ Apply these invariants to every change in the Proj4D repository.
   and interactions. Never implement 2D as a fixed camera over the 4D world.
 - Keep both worlds unbounded horizontally and procedurally generated. Keep
   terrain infinitely deep along negative `y`.
-- Keep the real 4D world unit as a `16x16x16x16` chunk and the real 2D world
-  unit as a `16x16` chunk, with explicit dimension-correct chunk and local
-  coordinates and correct floor division for negative positions.
+- Keep the sole generation and storage unit as a real `16x16x16x16` chunk,
+  with explicit 4D chunk and local coordinates and correct floor division for
+  negative positions. Never restore separately generated or stored 2D chunks.
 - Present a dimension menu with `4D` and `2D` before world creation, followed
   by a terrain menu with `Flat`, `Low`, and `High`. Support keyboard and mouse
   selection in both menus.
@@ -31,8 +31,9 @@ Apply these invariants to every change in the Proj4D repository.
 - Generate `High` with the original deterministic seeded four-dimensional
   density and noise terrain through `TerrainMode::Density`. Retain
   `--normal-smoke-test` only as a compatibility command name.
-- Generate each 2D terrain as the exact `z=0, w=0` cross-section of the
-  corresponding 4D generator, with only `x` and vertical `y` in the world.
+- Implement each 2D terrain as a thin view of the authoritative 4D
+  `BlockWorld`: `(x,y)` must read and edit `(x,y,0,0)` through the same 4D
+  chunks and cache. Never copy or regenerate that plane into separate storage.
 - Represent each block as a tesseract with eight cubic boundary cells.
 - Render a native 4D perspective view into a solid 3D vision volume. Do not
   replace the view with 3D slices, independent 3D worlds, or fake depth.
@@ -95,7 +96,26 @@ Apply these invariants to every change in the Proj4D repository.
   vertical body bounds, radius, delta clamp, collision substeps, wall sliding,
   and sneak behavior as 4D mode, interpreted in `x/y`.
 - Route 2D building and breaking through exact 2D grid traversal and the
-  chunk-backed 2D world. Protect occupied player cells from placement.
+  shared chunk-backed 4D world at `z=0,w=0`. Protect occupied player cells
+  from placement.
+
+## Preserve Shared World Saves
+
+- Keep exactly three persistent world identities: Flat, Low, and High. Both
+  dimension modes must automatically continue the selected terrain's same
+  save; never add separate 2D saves or require save/load menu buttons.
+- Persist the authoritative seed, terrain identity, and all 4D edit overrides,
+  including edits outside the 2D slice. A 2D edit must reload in 4D and a 4D
+  edit at `z=0,w=0` must reload in 2D.
+- Keep the save format versioned and bounded. Validate its signature, terrain,
+  seed, size, coordinate ordering, block values, and checksum before mutating
+  the in-memory world. Refuse damaged or mismatched saves without overwriting
+  them.
+- Save successful block edits promptly and again on clean exit. Install saves
+  through a completed temporary file and atomic replacement, retaining the
+  previous file if replacement fails.
+- Keep graphical smoke modes isolated from real user saves so CI and
+  screenshots remain deterministic.
 
 ## Keep Ownership Clear
 
@@ -116,8 +136,9 @@ Apply these invariants to every change in the Proj4D repository.
   evidence.
 - Cache topology extraction independently from camera projection so ordinary
   look rotation does not regenerate chunks or rescan blocks.
-- Add tests for every behavior change, especially both chunk layouts, 4D basis
-  orthogonality, 2D pitch and direction, negative chunk math, menu routing,
+- Add tests for every behavior change, especially shared 4D chunk ownership,
+  cross-dimensional save round trips, corrupt-save rejection, terrain-save
+  isolation, 4D basis orthogonality, 2D pitch and direction, menu routing,
   Flat boundaries, Low golden parity with Hypercraft Flat, High density
   determinism, exact 2D terrain cross-sections, deep terrain, occlusion, cache
   limits, edit survival, both projections, shared physics, and ray interaction.
@@ -132,4 +153,5 @@ Apply these invariants to every change in the Proj4D repository.
   credentials, machine identifiers, private URLs, or user data.
 - Use project-relative documentation and temporary paths for generated output.
 - Keep build products, screenshots, logs, and editor state out of Git.
+- Keep user save files and temporary/backup save artifacts out of Git.
 - Develop on short-lived branches, open a pull request, and require CI to pass.

@@ -96,6 +96,28 @@ std::size_t BlockWorld::maximumLoadedChunks() const {
 
 std::uint64_t BlockWorld::revision() const { return revision_; }
 
+std::vector<BlockEdit> BlockWorld::edits() const {
+  std::vector<BlockEdit> result;
+  result.reserve(overrides_.size());
+  for (const auto &[coordinate, solid] : overrides_) {
+    result.push_back({coordinate, solid});
+  }
+  return result;
+}
+
+void BlockWorld::replaceEdits(std::span<const BlockEdit> edits) {
+  std::unordered_map<BlockCoord, bool, BlockCoordHash> replacements;
+  replacements.reserve(edits.size());
+  for (const BlockEdit &edit : edits) {
+    if (edit.solid != generator_.generatedSolidAt(edit.coordinate)) {
+      replacements[edit.coordinate] = edit.solid;
+    }
+  }
+  overrides_ = std::move(replacements);
+  chunks_.clear();
+  ++revision_;
+}
+
 BlockCoord containingBlock(const Vec4 &point) {
   return {
       static_cast<int>(std::floor(point.x)),

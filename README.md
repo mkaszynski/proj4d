@@ -1,8 +1,9 @@
 # Proj4D
 
 Proj4D is an intentionally small C++ block game with genuine 4D and 2D
-worlds. The first startup menu selects the number of spatial dimensions; the
-second selects Flat, Low, or High terrain for that dimension.
+views of three shared worlds. The first startup menu selects the number of
+spatial dimensions; the second continues the persistent Flat, Low, or High
+world through that view.
 
 The 4D mode does not reveal its world as a stack of 3D slices. A native 4D
 perspective camera produces a solid 3D image:
@@ -39,12 +40,13 @@ Both dimensions offer the same terrain choices:
   from before superflat was introduced. It is represented internally by
   `TerrainMode::Density`.
 
-The 4D unit of generation and storage is a real `16x16x16x16` chunk containing
-65,536 tesseracts. The 2D unit is a real `16x16` chunk containing 256 squares.
-In both modes, nearby chunks generate lazily, a bounded least-recently-used
-cache prevents infinite memory growth, and player edits survive eviction and
-deterministic regeneration. Each 2D terrain is the exact `z=0, w=0`
-cross-section of its corresponding 4D generator.
+The only unit of generation and storage is a real `16x16x16x16` chunk
+containing 65,536 tesseracts. Nearby chunks generate lazily, a bounded
+least-recently-used cache prevents infinite memory growth, and player edits
+survive eviction and deterministic regeneration. The 2D mode is a thin adapter
+over the same chunks: its square `(x,y)` is exactly the shared tesseract
+`(x,y,0,0)`. An edit made in 2D therefore appears in 4D, while 4D edits outside
+`z=0,w=0` remain present but are outside the 2D view.
 
 In 4D, every tesseract has eight cubical boundary cells. A cell is visible only
 when the neighboring tesseract on that side is air, including across chunk
@@ -93,6 +95,22 @@ bitmaps for both menus and every playable combination:
 
 `--normal-smoke-test` remains the compatibility name for the 4D High terrain
 smoke path.
+
+## World saving
+
+Flat, Low, and High each have one persistent world. Dimension is not part of
+the save identity: selecting Low in either 2D or 4D automatically opens the
+same Low world, for example. There are no save or load buttons. Successful
+building and breaking saves immediately, and the world is checked again when
+the game exits.
+
+Saves live in the operating system's per-user Proj4D application-data
+directory under `worlds/flat.p4world`, `worlds/low.p4world`, and
+`worlds/high.p4world`. The versioned files store the terrain identity, seed,
+and durable 4D edit overrides rather than generated chunks. Writes use a
+temporary file and atomic replacement, while signatures, size checks, sorted
+coordinates, and checksums reject damaged or mismatched saves without
+overwriting them.
 
 ## Controls
 
@@ -150,10 +168,13 @@ sneaking.
 ## Architecture
 
 - `TerrainGenerator` owns Flat, Hypercraft-compatible Low, and original High
-  density terrain. `TerrainGenerator2D` exposes exact 2D cross-sections.
-- `Chunk` stores `16x16x16x16` tesseracts; `Chunk2D` stores `16x16` squares.
-- `BlockWorld` and `BlockWorld2D` own lazy generation, bounded caches, and
-  durable edit overrides in their respective unbounded spaces.
+  density terrain.
+- `Chunk` stores `16x16x16x16` tesseracts. Both dimension modes use the same
+  `BlockWorld`, lazy generation, bounded cache, and durable edit overrides.
+- `BlockWorld2D` owns no terrain or chunks; it maps 2D operations directly to
+  the authoritative `BlockWorld` plane at `z=0,w=0`.
+- `world_save` serializes the three terrain worlds with validation and atomic
+  replacement. SDL supplies only the platform-specific application-data path.
 - `Camera4D` performs true 4D-to-3D perspective projection. `Camera2D` performs
   true 2D-to-1D projection with bounded vertical pitch and reversible
   horizontal direction.
@@ -163,9 +184,10 @@ sneaking.
   and rear blocks from appearing through solid terrain.
 - The SDL layer owns platform input, menus, final display projection, and
   drawing; simulation and projection truth stay in portable C++.
-- Tests cover both projections, both chunk layouts, terrain parity, negative
-  coordinates, infinite depth, bounded caches, edit survival, occlusion,
-  movement, sneaking, jumping, targeting, building, and breaking.
+- Tests cover both projections, shared 4D chunk ownership, cross-dimensional
+  edits, save/reload round trips, terrain-save isolation, corruption rejection,
+  terrain parity, negative coordinates, infinite depth, bounded caches,
+  occlusion, movement, sneaking, jumping, targeting, building, and breaking.
 
 See the repository's
 [Proj4D development skill](.codex/skills/proj4d-development-guardrails/SKILL.md)

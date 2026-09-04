@@ -1,8 +1,11 @@
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -18,10 +21,36 @@
 #include "proj4d/view_status.hpp"
 #include "proj4d/world.hpp"
 #include "proj4d/world2d.hpp"
+#include "proj4d/world_save.hpp"
 
 namespace {
 
 int failures = 0;
+
+class TemporaryDirectory {
+public:
+  TemporaryDirectory()
+      : path_(std::filesystem::temp_directory_path() /
+              ("proj4d-save-test-" +
+               std::to_string(std::chrono::steady_clock::now()
+                                  .time_since_epoch()
+                                  .count()))) {
+    std::filesystem::create_directories(path_);
+  }
+
+  ~TemporaryDirectory() {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+  }
+
+  TemporaryDirectory(const TemporaryDirectory &) = delete;
+  TemporaryDirectory &operator=(const TemporaryDirectory &) = delete;
+
+  [[nodiscard]] const std::filesystem::path &path() const { return path_; }
+
+private:
+  std::filesystem::path path_;
+};
 
 void expect(bool condition, const std::string &message) {
   if (!condition) {
@@ -518,23 +547,8 @@ void testTrueFourDimensionalChunks() {
 }
 
 void testTrueTwoDimensionalWorldAndChunks() {
-  expect(proj4d::chunkSize2D == 16, "each 2D chunk axis is 16 blocks");
-  expect(proj4d::chunkVolume2D == 16 * 16,
-         "2D chunks contain exactly 16x16 squares");
-  expect(proj4d::chunkCoordForBlock(proj4d::BlockCoord2D{-1, -17}) ==
-             proj4d::ChunkCoord2D{-1, -2},
-         "negative 2D positions use floor division");
-  expect(proj4d::localCoordForBlock(proj4d::BlockCoord2D{-1, -17}) ==
-             proj4d::LocalBlockCoord2D{15, 15},
-         "negative 2D positions map into positive local coordinates");
-  expect(proj4d::localBlockIndex(proj4d::LocalBlockCoord2D{15, 15}) == 255U,
-         "both 2D axes contribute to chunk storage");
-
-  proj4d::Chunk2D chunk({2, -1});
-  chunk.setSolid({15, 2}, true);
-  expect(chunk.isSolid({15, 2}), "a 2D chunk stores a square");
-  expect(!chunk.isSolid({14, 2}),
-         "neighboring 2D chunk cells remain independent");
+  expect(proj4d::blockCoord4D({-1, -17}) == proj4d::BlockCoord{-1, -17, 0, 0},
+         "2D coordinates map exactly onto the z=0,w=0 4D slice");
 
   constexpr std::array modes{
       proj4d::TerrainMode::Flat,
@@ -543,32 +557,126 @@ void testTrueTwoDimensionalWorldAndChunks() {
   };
   constexpr std::array<int, 7> xCoordinates{-64, -17, 0, 8, 31, 64, 129};
   for (const proj4d::TerrainMode mode : modes) {
-    const proj4d::TerrainGenerator generator4D(2468U, mode);
-    const proj4d::TerrainGenerator2D generator2D(2468U, mode);
+    proj4d::BlockWorld world4D(mode, 2468U, 4U);
+    proj4d::BlockWorld2D world2D(world4D);
     for (const int x : xCoordinates) {
-      expect(generator2D.surfaceHeightAt(x) ==
-                 generator4D.surfaceHeightAt(x, 0, 0),
+      expect(world2D.surfaceHeightAt(x) == world4D.surfaceHeightAt(x, 0, 0),
              "2D terrain is the exact z=0,w=0 cross-section of its 4D mode");
       for (int y = -8; y <= 32; y += 4) {
-        expect(generator2D.generatedSolidAt({x, y}) ==
-                   generator4D.generatedSolidAt({x, y, 0, 0}),
+        expect(world2D.generatedSolidAt({x, y}) ==
+                   world4D.generatedSolidAt({x, y, 0, 0}),
                "2D terrain solidity matches the selected 4D generator");
       }
     }
   }
 
-  proj4d::BlockWorld2D world(proj4d::TerrainMode::Low, 2468U, 2U);
+  proj4d::BlockWorld sharedWorld(proj4d::TerrainMode::Low, 2468U, 2U);
+  proj4d::BlockWorld2D world(sharedWorld);
   static_cast<void>(world.isSolid({0, 0}));
   static_cast<void>(world.isSolid({32, 0}));
   static_cast<void>(world.isSolid({64, 0}));
-  expect(world.loadedChunkCount() <= world.maximumLoadedChunks(),
-         "the infinite 2D chunk cache stays bounded");
+  expect(world.loadedChunkCount() == sharedWorld.loadedChunkCount() &&
+             world.loadedChunkCount() <= world.maximumLoadedChunks(),
+         "2D uses the same bounded 16x16x16x16 chunk cache as 4D");
   const proj4d::BlockCoord2D edit{1000000, 1000};
   const bool generated = world.generatedSolidAt(edit);
   expect(world.setSolid(edit, !generated), "a distant 2D block can be edited");
+  expect(sharedWorld.isSolid({edit.x, edit.y, 0, 0}) == !generated,
+         "a 2D edit immediately changes the corresponding 4D tesseract");
   static_cast<void>(world.isSolid({-96, 0}));
   expect(world.isSolid(edit) == !generated,
-         "2D edits survive chunk eviction and regeneration");
+         "shared 4D edits survive chunk eviction and regeneration in 2D");
+}
+
+void testSharedWorldSaving() {
+  TemporaryDirectory temporaryDirectory;
+  const std::filesystem::path flatPath =
+      temporaryDirectory.path() /
+      proj4d::worldSaveFilename(proj4d::TerrainMode::Flat);
+  const std::filesystem::path lowPath =
+      temporaryDirectory.path() /
+      proj4d::worldSaveFilename(proj4d::TerrainMode::Low);
+  const std::filesystem::path highPath =
+      temporaryDirectory.path() /
+      proj4d::worldSaveFilename(proj4d::TerrainMode::Density);
+  expect(flatPath != lowPath && flatPath != highPath && lowPath != highPath,
+         "Flat, Low, and High use three distinct persistent worlds");
+
+  constexpr std::uint32_t seed = 2468U;
+  proj4d::BlockWorld original(proj4d::TerrainMode::Low, seed, 4U);
+  proj4d::BlockWorld2D slice(original);
+  const proj4d::BlockCoord2D sliceEdit{7, 100};
+  const proj4d::BlockCoord2D brokenSliceEdit{9, 0};
+  const proj4d::BlockCoord outOfSliceEdit{8, 100, 3, -2};
+  expect(slice.setSolid(sliceEdit, true),
+         "2D can add an edit to the shared 4D world");
+  expect(slice.setSolid(brokenSliceEdit, false),
+         "2D can remove a generated block from the shared 4D world");
+  expect(original.setSolid(outOfSliceEdit, true),
+         "4D can add an edit outside the thin 2D slice");
+
+  std::string error;
+  expect(proj4d::saveWorldSave(lowPath, original, error),
+         "a shared terrain world saves successfully: " + error);
+  std::filesystem::path temporarySavePath = lowPath;
+  temporarySavePath += ".tmp";
+  expect(std::filesystem::exists(lowPath) &&
+             !std::filesystem::exists(temporarySavePath),
+         "saving atomically installs the final file without a temporary file");
+
+  proj4d::BlockWorld loaded(proj4d::TerrainMode::Low, seed, 4U);
+  expect(proj4d::loadWorldSave(lowPath, loaded, error) ==
+             proj4d::WorldLoadStatus::Loaded,
+         "selecting the same terrain loads its existing world: " + error);
+  proj4d::BlockWorld2D loadedSlice(loaded);
+  expect(loadedSlice.isSolid(sliceEdit),
+         "an edit made in 2D is present after loading the world in 4D");
+  expect(!loadedSlice.isSolid(brokenSliceEdit),
+         "a block broken in 2D remains absent after loading in 4D");
+  expect(loaded.isSolid(outOfSliceEdit),
+         "4D edits outside the 2D slice persist without becoming 2D blocks");
+  expect(loaded.edits().size() == 3U,
+         "the save restores exactly the durable world edit overrides");
+
+  expect(loaded.setSolid(proj4d::blockCoord4D(sliceEdit), false),
+         "4D can modify the same tesseract previously edited through 2D");
+  expect(proj4d::saveWorldSave(lowPath, loaded, error),
+         "the updated shared world saves successfully: " + error);
+  proj4d::BlockWorld reloaded(proj4d::TerrainMode::Low, seed, 4U);
+  expect(proj4d::loadWorldSave(lowPath, reloaded, error) ==
+             proj4d::WorldLoadStatus::Loaded,
+         "the updated shared world reloads successfully: " + error);
+  proj4d::BlockWorld2D reloadedSlice(reloaded);
+  expect(!reloadedSlice.isSolid(sliceEdit),
+         "a saved 4D edit on z=0,w=0 is visible when continuing in 2D");
+
+  proj4d::BlockWorld wrongTerrain(proj4d::TerrainMode::Flat, seed, 4U);
+  expect(proj4d::loadWorldSave(lowPath, wrongTerrain, error) ==
+             proj4d::WorldLoadStatus::Error,
+         "a terrain world cannot accidentally load another terrain's save");
+  expect(proj4d::loadWorldSave(flatPath, wrongTerrain, error) ==
+             proj4d::WorldLoadStatus::NotFound,
+         "a terrain without a save starts as its generated world");
+
+  const std::filesystem::path corruptPath =
+      temporaryDirectory.path() / "corrupt.p4world";
+  std::filesystem::copy_file(lowPath, corruptPath);
+  {
+    std::fstream corrupt(corruptPath,
+                         std::ios::binary | std::ios::in | std::ios::out);
+    corrupt.seekg(44, std::ios::beg);
+    const int originalByte = corrupt.get();
+    corrupt.seekp(44, std::ios::beg);
+    corrupt.put(static_cast<char>(originalByte ^ 0x01));
+  }
+  proj4d::BlockWorld protectedWorld(proj4d::TerrainMode::Low, seed, 4U);
+  expect(protectedWorld.setSolid({22, 100, 0, 0}, true),
+         "the corruption test world starts with an in-memory edit");
+  expect(proj4d::loadWorldSave(corruptPath, protectedWorld, error) ==
+                 proj4d::WorldLoadStatus::Error &&
+             error == "the world save checksum does not match" &&
+             protectedWorld.isSolid({22, 100, 0, 0}),
+         "a corrupt save is rejected without replacing the current world");
 }
 
 void testTrueTwoDimensionalProjection() {
@@ -615,7 +723,8 @@ void testTrueTwoDimensionalProjection() {
   expect(camera.horizontalDirection() == -1 && camera.movementForward().x < 0.0,
          "Z reverses the 2D view and forward movement direction");
 
-  proj4d::BlockWorld2D sideWorld(proj4d::TerrainMode::Flat, 4100U);
+  proj4d::BlockWorld sideBacking(proj4d::TerrainMode::Flat, 4100U);
+  proj4d::BlockWorld2D sideWorld(sideBacking);
   static_cast<void>(sideWorld.setSolid({0, 100}, true));
   static_cast<void>(sideWorld.setSolid({2, 100}, true));
   proj4d::Camera2D sideCamera;
@@ -636,7 +745,8 @@ void testTrueTwoDimensionalProjection() {
                        }) > 1,
          "a projected 2D square side occupies a readable rectangular interval");
 
-  proj4d::BlockWorld2D floorWorld(proj4d::TerrainMode::Flat, 4101U);
+  proj4d::BlockWorld floorBacking(proj4d::TerrainMode::Flat, 4101U);
+  proj4d::BlockWorld2D floorWorld(floorBacking);
   static_cast<void>(floorWorld.setSolid({0, 100}, true));
   proj4d::Camera2D floorCamera;
   floorCamera.position = {0.5, 98.0};
@@ -648,7 +758,8 @@ void testTrueTwoDimensionalProjection() {
 }
 
 void testTwoDimensionalPhysicsAndInteraction() {
-  proj4d::BlockWorld2D world(proj4d::TerrainMode::Flat, 4200U);
+  proj4d::BlockWorld backingWorld(proj4d::TerrainMode::Flat, 4200U);
+  proj4d::BlockWorld2D world(backingWorld);
   proj4d::Camera2D camera;
   camera.position = {0.5, 1.0 + proj4d::playerEyeHeight};
   const proj4d::Vec2 start = camera.position;
@@ -691,7 +802,8 @@ void testTwoDimensionalPhysicsAndInteraction() {
                                  start.y - proj4d::playerSneakEyeDrop),
          "2D Shift sneaking matches 4D speed and eye height");
 
-  proj4d::BlockWorld2D ledge(proj4d::TerrainMode::Flat, 4201U);
+  proj4d::BlockWorld ledgeBacking(proj4d::TerrainMode::Flat, 4201U);
+  proj4d::BlockWorld2D ledge(ledgeBacking);
   for (int x = 1; x <= 4; ++x) {
     static_cast<void>(ledge.setSolid({x, 0}, false));
   }
@@ -705,7 +817,8 @@ void testTwoDimensionalPhysicsAndInteraction() {
   expect(edgeCamera.position.x < 1.16 && edgeMotion.grounded,
          "2D Shift sneaking prevents walking off an X ledge");
 
-  proj4d::BlockWorld2D interactionWorld(proj4d::TerrainMode::Flat, 4202U);
+  proj4d::BlockWorld interactionBacking(proj4d::TerrainMode::Flat, 4202U);
+  proj4d::BlockWorld2D interactionWorld(interactionBacking);
   static_cast<void>(interactionWorld.setSolid({3, 100}, true));
   const proj4d::Vec2 origin{0.5, 100.5};
   const proj4d::Vec2 right{1.0, 0.0};
@@ -1036,6 +1149,7 @@ int main() {
     testPlayerJumpsOneAndAHalfBlocks();
     testTrueFourDimensionalChunks();
     testTrueTwoDimensionalWorldAndChunks();
+    testSharedWorldSaving();
     testTrueTwoDimensionalProjection();
     testTwoDimensionalPhysicsAndInteraction();
     testFlatTerrainAndPreservedDensityFunctions();

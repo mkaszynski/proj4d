@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -24,6 +25,7 @@
 #include "proj4d/view_status.hpp"
 #include "proj4d/world.hpp"
 #include "proj4d/world2d.hpp"
+#include "proj4d/world_save.hpp"
 
 namespace proj4d {
 
@@ -84,6 +86,57 @@ const char *terrainModeName(TerrainMode mode) {
     return "High";
   }
   return "Flat";
+}
+
+struct PersistentWorldSession {
+  std::filesystem::path path;
+  std::uint64_t savedRevision{};
+  bool failureReported{};
+};
+
+bool initializePersistentWorld(BlockWorld &world,
+                               PersistentWorldSession &session,
+                               std::string &error) {
+  char *preferencePath = SDL_GetPrefPath("Proj4D", "Proj4D");
+  if (preferencePath == nullptr) {
+    error =
+        std::string("could not locate the save directory: ") + SDL_GetError();
+    return false;
+  }
+  session.path = std::filesystem::path(preferencePath) / "worlds" /
+                 worldSaveFilename(world.terrainMode());
+  SDL_free(preferencePath);
+
+  const WorldLoadStatus loadStatus = loadWorldSave(session.path, world, error);
+  if (loadStatus == WorldLoadStatus::Error) {
+    return false;
+  }
+  if (loadStatus == WorldLoadStatus::NotFound &&
+      !saveWorldSave(session.path, world, error)) {
+    return false;
+  }
+  session.savedRevision = world.revision();
+  std::cout << (loadStatus == WorldLoadStatus::Loaded ? "Loaded " : "Created ")
+            << terrainModeName(world.terrainMode()) << " world save\n";
+  return true;
+}
+
+bool persistChangedWorld(const BlockWorld &world,
+                         PersistentWorldSession &session) {
+  if (world.revision() == session.savedRevision) {
+    return true;
+  }
+  std::string error;
+  if (!saveWorldSave(session.path, world, error)) {
+    if (!session.failureReported) {
+      std::cerr << "World save failed: " << error << '\n';
+      session.failureReported = true;
+    }
+    return false;
+  }
+  session.savedRevision = world.revision();
+  session.failureReported = false;
+  return true;
 }
 
 std::optional<ScreenPoint> projectForDisplay(Vec3 point,
@@ -657,7 +710,19 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
                      ("Proj4D | 2D " + worldName +
                       " | Mouse: vertical look | Z: reverse | Shift: sneak")
                          .c_str());
-  BlockWorld2D world(terrainMode);
+  BlockWorld sharedWorld(terrainMode);
+  std::optional<PersistentWorldSession> persistence;
+  if (!smokeTest) {
+    persistence.emplace();
+    std::string saveError;
+    if (!initializePersistentWorld(sharedWorld, *persistence, saveError)) {
+      std::cerr << "Could not open the selected world: " << saveError << '\n';
+      SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "World save error",
+                               saveError.c_str(), window);
+      return 1;
+    }
+  }
+  BlockWorld2D world(sharedWorld);
   Camera2D camera;
   const int spawnSurface = world.surfaceHeightAt(0);
   const Vec2 spawnPosition{
@@ -707,9 +772,10 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
         camera.turnVertical(-static_cast<double>(event.motion.yrel) *
                             mouseLookRadiansPerPixel);
       } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+        bool worldChanged = false;
         if (event.button.button == SDL_BUTTON_LEFT) {
-          static_cast<void>(
-              breakAlongRay(world, camera.position, camera.forward(), 8.0));
+          worldChanged =
+              breakAlongRay(world, camera.position, camera.forward(), 8.0);
         } else if (event.button.button == SDL_BUTTON_RIGHT) {
           const std::array<BlockCoord2D, 2> protectedBlocks{{
               containingBlock(camera.position),
@@ -718,8 +784,11 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
                                        ? playerSneakCollisionBounds
                                        : playerCollisionBounds),
           }};
-          static_cast<void>(buildAlongRay(
-              world, camera.position, camera.forward(), 8.0, protectedBlocks));
+          worldChanged = buildAlongRay(world, camera.position, camera.forward(),
+                                       8.0, protectedBlocks);
+        }
+        if (worldChanged && persistence) {
+          static_cast<void>(persistChangedWorld(sharedWorld, *persistence));
         }
       }
     }
@@ -741,7 +810,7 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
     ++frameCount;
     if (!smokeTest && frameCount % 60 == 0) {
       const std::string title =
-          "Proj4D | 2D " + worldName + " | infinite 16x16 chunks | loaded " +
+          "Proj4D | 2D " + worldName + " | shared 16^4 chunks | loaded " +
           std::to_string(world.loadedChunkCount()) +
           " | W/S move | Mouse: vertical | Z: reverse | Shift: sneak";
       SDL_SetWindowTitle(window, title.c_str());
@@ -755,7 +824,9 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
       running = false;
     }
   }
-  return frameCount < 0 ? 1 : 0;
+  const bool saved =
+      !persistence || persistChangedWorld(sharedWorld, *persistence);
+  return frameCount < 0 || !saved ? 1 : 0;
 }
 
 } // namespace
@@ -884,6 +955,20 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                               "Ctrl: orbit | Shift: sneak | WASDQE move")
                                  .c_str());
   BlockWorld world(*selectedTerrain);
+  std::optional<PersistentWorldSession> persistence;
+  if (!smokeTest) {
+    persistence.emplace();
+    std::string saveError;
+    if (!initializePersistentWorld(world, *persistence, saveError)) {
+      std::cerr << "Could not open the selected world: " << saveError << '\n';
+      SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "World save error",
+                               saveError.c_str(), window);
+      SDL_DestroyRenderer(renderer);
+      SDL_DestroyWindow(window);
+      SDL_Quit();
+      return 1;
+    }
+  }
   Camera4D camera;
   const int spawnSurface = world.surfaceHeightAt(0, 0, 0);
   const Vec4 spawnPosition{
@@ -956,9 +1041,10 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
             display.distance - static_cast<double>(event.wheel.y) * 0.2, 2.6,
             6.5);
       } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+        bool worldChanged = false;
         if (event.button.button == SDL_BUTTON_LEFT) {
-          static_cast<void>(
-              breakAlongRay(world, camera.position, camera.forward, 8.0));
+          worldChanged =
+              breakAlongRay(world, camera.position, camera.forward, 8.0);
         } else if (event.button.button == SDL_BUTTON_RIGHT) {
           const std::array<BlockCoord, 2> protectedBlocks{{
               containingBlock(camera.position),
@@ -967,8 +1053,11 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                                        ? playerSneakCollisionBounds
                                        : playerCollisionBounds),
           }};
-          static_cast<void>(buildAlongRay(
-              world, camera.position, camera.forward, 8.0, protectedBlocks));
+          worldChanged = buildAlongRay(world, camera.position, camera.forward,
+                                       8.0, protectedBlocks);
+        }
+        if (worldChanged && persistence) {
+          static_cast<void>(persistChangedWorld(world, *persistence));
         }
       }
     }
@@ -1014,10 +1103,12 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
     }
   }
 
+  const bool saved = !persistence || persistChangedWorld(world, *persistence);
+
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();
-  return frameCount < 0 ? 1 : 0;
+  return frameCount < 0 || !saved ? 1 : 0;
 }
 
 } // namespace proj4d

@@ -4,199 +4,43 @@
 #include <cmath>
 #include <limits>
 
-#include "proj4d/coordinates.hpp"
-
 namespace proj4d {
 
-namespace {
-
-void mixCoordinate(std::uint64_t &hash, int value) {
-  hash ^= static_cast<std::uint64_t>(static_cast<std::int64_t>(value) +
-                                     0x9E3779B9LL);
-  hash *= 1099511628211ULL;
+BlockCoord blockCoord4D(const BlockCoord2D &coordinate) {
+  return {coordinate.x, coordinate.y, 0, 0};
 }
 
-std::size_t hashCoordinates(int x, int y) {
-  std::uint64_t hash = 1469598103934665603ULL;
-  mixCoordinate(hash, x);
-  mixCoordinate(hash, y);
-  if constexpr (sizeof(std::size_t) >= sizeof(std::uint64_t)) {
-    return static_cast<std::size_t>(hash);
-  }
-  return static_cast<std::size_t>(hash ^ (hash >> 32U));
-}
-
-} // namespace
-
-std::size_t ChunkCoord2DHash::operator()(const ChunkCoord2D &coordinate) const {
-  return hashCoordinates(coordinate.x, coordinate.y);
-}
-
-std::size_t BlockCoord2DHash::operator()(const BlockCoord2D &coordinate) const {
-  return hashCoordinates(coordinate.x, coordinate.y);
-}
-
-ChunkCoord2D chunkCoordForBlock(const BlockCoord2D &block) {
-  return {floorDiv(block.x, chunkSize2D), floorDiv(block.y, chunkSize2D)};
-}
-
-LocalBlockCoord2D localCoordForBlock(const BlockCoord2D &block) {
-  return {floorMod(block.x, chunkSize2D), floorMod(block.y, chunkSize2D)};
-}
-
-BlockCoord2D blockCoordFromChunkLocal(const ChunkCoord2D &chunk,
-                                      const LocalBlockCoord2D &local) {
-  return {chunk.x * chunkSize2D + local.x, chunk.y * chunkSize2D + local.y};
-}
-
-std::size_t localBlockIndex(const LocalBlockCoord2D &local) {
-  return static_cast<std::size_t>(local.x + chunkSize2D * local.y);
-}
-
-Chunk2D::Chunk2D(ChunkCoord2D coordinate) : coordinate_(coordinate) {}
-
-const ChunkCoord2D &Chunk2D::coordinate() const { return coordinate_; }
-
-bool Chunk2D::isSolid(const LocalBlockCoord2D &local) const {
-  const std::size_t index = localBlockIndex(local);
-  const std::size_t word = index / wordBits;
-  const std::size_t bit = index % wordBits;
-  return (blocks_[word] & (std::uint64_t{1} << bit)) != 0U;
-}
-
-void Chunk2D::setSolid(const LocalBlockCoord2D &local, bool solid) {
-  const std::size_t index = localBlockIndex(local);
-  const std::size_t word = index / wordBits;
-  const std::size_t bit = index % wordBits;
-  const std::uint64_t mask = std::uint64_t{1} << bit;
-  if (solid) {
-    blocks_[word] |= mask;
-  } else {
-    blocks_[word] &= ~mask;
-  }
-}
-
-TerrainGenerator2D::TerrainGenerator2D(std::uint32_t seed, TerrainMode mode)
-    : crossSectionGenerator_(seed, mode) {}
-
-std::uint32_t TerrainGenerator2D::seed() const {
-  return crossSectionGenerator_.seed();
-}
-
-TerrainMode TerrainGenerator2D::mode() const {
-  return crossSectionGenerator_.mode();
-}
-
-bool TerrainGenerator2D::generatedSolidAt(
-    const BlockCoord2D &coordinate) const {
-  return crossSectionGenerator_.generatedSolidAt(
-      {coordinate.x, coordinate.y, 0, 0});
-}
-
-int TerrainGenerator2D::surfaceHeightAt(int x) const {
-  return crossSectionGenerator_.surfaceHeightAt(x, 0, 0);
-}
-
-Chunk2D
-TerrainGenerator2D::generateChunk(const ChunkCoord2D &coordinate) const {
-  Chunk2D chunk(coordinate);
-  for (int y = 0; y < chunkSize2D; ++y) {
-    for (int x = 0; x < chunkSize2D; ++x) {
-      const LocalBlockCoord2D local{x, y};
-      chunk.setSolid(
-          local, generatedSolidAt(blockCoordFromChunkLocal(coordinate, local)));
-    }
-  }
-  return chunk;
-}
-
-BlockWorld2D::BlockWorld2D(std::uint32_t seed, std::size_t maximumLoadedChunks)
-    : BlockWorld2D(TerrainMode::Flat, seed, maximumLoadedChunks) {}
-
-BlockWorld2D::BlockWorld2D(TerrainMode terrainMode, std::uint32_t seed,
-                           std::size_t maximumLoadedChunks)
-    : generator_(seed, terrainMode),
-      maximumLoadedChunks_(std::max<std::size_t>(1U, maximumLoadedChunks)) {}
-
-Chunk2D &BlockWorld2D::ensureChunk(const ChunkCoord2D &coordinate) const {
-  if (auto existing = chunks_.find(coordinate); existing != chunks_.end()) {
-    existing->second.lastAccess = ++accessClock_;
-    return existing->second.chunk;
-  }
-
-  Chunk2D generated = generator_.generateChunk(coordinate);
-  for (const auto &[block, solid] : overrides_) {
-    if (chunkCoordForBlock(block) == coordinate) {
-      generated.setSolid(localCoordForBlock(block), solid);
-    }
-  }
-  auto [inserted, wasInserted] = chunks_.try_emplace(
-      coordinate, CachedChunk{std::move(generated), ++accessClock_});
-  static_cast<void>(wasInserted);
-  evictLeastRecentlyUsed(coordinate);
-  return inserted->second.chunk;
-}
-
-void BlockWorld2D::evictLeastRecentlyUsed(
-    const ChunkCoord2D &protectedChunk) const {
-  while (chunks_.size() > maximumLoadedChunks_) {
-    auto candidate = chunks_.end();
-    for (auto current = chunks_.begin(); current != chunks_.end(); ++current) {
-      if (current->first == protectedChunk) {
-        continue;
-      }
-      if (candidate == chunks_.end() ||
-          current->second.lastAccess < candidate->second.lastAccess) {
-        candidate = current;
-      }
-    }
-    if (candidate == chunks_.end()) {
-      return;
-    }
-    chunks_.erase(candidate);
-  }
-}
+BlockWorld2D::BlockWorld2D(BlockWorld &world) : world_(world) {}
 
 bool BlockWorld2D::isSolid(const BlockCoord2D &coordinate) const {
-  Chunk2D &chunk = ensureChunk(chunkCoordForBlock(coordinate));
-  return chunk.isSolid(localCoordForBlock(coordinate));
+  return world_.isSolid(blockCoord4D(coordinate));
 }
 
 bool BlockWorld2D::generatedSolidAt(const BlockCoord2D &coordinate) const {
-  return generator_.generatedSolidAt(coordinate);
+  return world_.generatedSolidAt(blockCoord4D(coordinate));
 }
 
 bool BlockWorld2D::setSolid(const BlockCoord2D &coordinate, bool solid) {
-  if (isSolid(coordinate) == solid) {
-    return false;
-  }
-  const bool generated = generator_.generatedSolidAt(coordinate);
-  if (solid == generated) {
-    overrides_.erase(coordinate);
-  } else {
-    overrides_[coordinate] = solid;
-  }
-  ensureChunk(chunkCoordForBlock(coordinate))
-      .setSolid(localCoordForBlock(coordinate), solid);
-  ++revision_;
-  return true;
+  return world_.setSolid(blockCoord4D(coordinate), solid);
 }
 
 int BlockWorld2D::surfaceHeightAt(int x) const {
-  return generator_.surfaceHeightAt(x);
+  return world_.surfaceHeightAt(x, 0, 0);
 }
 
-std::uint32_t BlockWorld2D::seed() const { return generator_.seed(); }
+std::uint32_t BlockWorld2D::seed() const { return world_.seed(); }
 
-TerrainMode BlockWorld2D::terrainMode() const { return generator_.mode(); }
+TerrainMode BlockWorld2D::terrainMode() const { return world_.terrainMode(); }
 
-std::size_t BlockWorld2D::loadedChunkCount() const { return chunks_.size(); }
+std::size_t BlockWorld2D::loadedChunkCount() const {
+  return world_.loadedChunkCount();
+}
 
 std::size_t BlockWorld2D::maximumLoadedChunks() const {
-  return maximumLoadedChunks_;
+  return world_.maximumLoadedChunks();
 }
 
-std::uint64_t BlockWorld2D::revision() const { return revision_; }
+std::uint64_t BlockWorld2D::revision() const { return world_.revision(); }
 
 BlockCoord2D containingBlock(const Vec2 &point) {
   return {static_cast<int>(std::floor(point.x)),
