@@ -1,8 +1,34 @@
 #include "proj4d/render2d.hpp"
 
 #include <algorithm>
+#include <cstdint>
 
 namespace proj4d {
+
+int blockBrightnessPercent2D(const BlockCoord2D &block) {
+  std::uint32_t hash = 2166136261U;
+  hash = (hash ^ static_cast<std::uint32_t>(block.x)) * 16777619U;
+  hash = (hash ^ static_cast<std::uint32_t>(block.y)) * 16777619U;
+  hash ^= hash >> 16U;
+  constexpr int shadeCount =
+      visionMaximumBrightnessPercent2D - visionMinimumBrightnessPercent2D + 1;
+  return visionMinimumBrightnessPercent2D +
+         static_cast<int>(hash % static_cast<std::uint32_t>(shadeCount));
+}
+
+std::array<std::uint8_t, 3> visionBlockColor2D(int worldAxis,
+                                               const BlockCoord2D &block) {
+  const auto &baseColor =
+      visionAxisColors2D.at(static_cast<std::size_t>(worldAxis));
+  const int brightness = blockBrightnessPercent2D(block);
+  std::array<std::uint8_t, 3> result{};
+  for (std::size_t channel = 0; channel < result.size(); ++channel) {
+    result[channel] = static_cast<std::uint8_t>(std::clamp(
+        (static_cast<int>(baseColor[channel]) * brightness + 50) / 100, 0,
+        255));
+  }
+  return result;
+}
 
 std::vector<VisionSample2D>
 buildVisionLine(const BlockWorld2D &world, const Camera2D &camera,

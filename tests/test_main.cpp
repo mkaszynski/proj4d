@@ -578,6 +578,23 @@ void testTrueTwoDimensionalProjection() {
              proj4d::visionAxisColors2D[1][0] >
                  proj4d::visionAxisColors2D[1][1],
          "2D colors are reversed so X is green and Y is red");
+  int darkestShade = 100;
+  int brightestShade = 100;
+  for (int y = -4; y <= 4; ++y) {
+    for (int x = -4; x <= 4; ++x) {
+      const int shade = proj4d::blockBrightnessPercent2D({x, y});
+      darkestShade = std::min(darkestShade, shade);
+      brightestShade = std::max(brightestShade, shade);
+      expect(shade == proj4d::blockBrightnessPercent2D({x, y}),
+             "a 2D block's random-looking brightness stays deterministic");
+    }
+  }
+  expect(darkestShade < 90 && brightestShade > 110,
+         "2D blocks visibly include both darker and brighter variations");
+  const auto shadedGreen = proj4d::visionBlockColor2D(0, {7, -3});
+  const auto shadedRed = proj4d::visionBlockColor2D(1, {7, -3});
+  expect(shadedGreen[1] > shadedGreen[0] && shadedRed[0] > shadedRed[1],
+         "per-block shading preserves the green X and red Y identities");
   proj4d::Camera2D camera;
   camera.position = {0.5, 2.5};
   const auto center = camera.project({2.5, 2.5});

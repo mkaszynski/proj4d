@@ -610,16 +610,15 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
       const VisionSample2D &next =
           samples[static_cast<std::size_t>(height - 1 - runEnd)];
       if (next.solid != sample.solid || next.worldAxis != sample.worldAxis ||
-          next.targeted != sample.targeted) {
+          next.block != sample.block || next.targeted != sample.targeted) {
         break;
       }
       ++runEnd;
     }
     if (sample.solid) {
       const std::array<std::uint8_t, 3> color =
-          sample.targeted
-              ? std::array<std::uint8_t, 3>{255, 255, 255}
-              : visionAxisColors2D[static_cast<std::size_t>(sample.worldAxis)];
+          sample.targeted ? std::array<std::uint8_t, 3>{255, 255, 255}
+                          : visionBlockColor2D(sample.worldAxis, sample.block);
       SDL_SetRenderDrawColor(renderer, color[0], color[1], color[2], 255);
       const SDL_Rect rectangle{stripLeft, runStart, stripWidth,
                                runEnd - runStart};

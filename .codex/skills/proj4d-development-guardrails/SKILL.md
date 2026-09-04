@@ -84,7 +84,9 @@ Apply these invariants to every change in the Proj4D repository.
   through nearer terrain.
 - Color each visible boundary interval by the world direction along which it
   runs, using the reversed 2D palette: green `X` and red `Y`. Keep the center
-  targeting mark visible.
+  targeting mark visible. Give every block a stable coordinate-derived,
+  visibly lighter or darker variation of its axis color; never use frame-time
+  randomness that makes block colors shimmer.
 - Map vertical mouse motion to vertical 2D look, ignore horizontal mouse
   motion, and clamp look at straight up and straight down. Use `Z` to reverse
   the horizontal view and forward direction.
