@@ -601,11 +601,6 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
                       target ? std::optional(target->block) : std::nullopt);
   const int stripWidth = std::max(1, height / visionLineWidthDivisor);
   const int stripLeft = (width - stripWidth) / 2;
-  constexpr std::array<std::array<std::uint8_t, 3>, 2> colors{{
-      {245, 140, 140},
-      {150, 245, 165},
-  }};
-
   int runStart = 0;
   while (runStart < height) {
     const VisionSample2D &sample =
@@ -622,8 +617,9 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
     }
     if (sample.solid) {
       const std::array<std::uint8_t, 3> color =
-          sample.targeted ? std::array<std::uint8_t, 3>{255, 255, 255}
-                          : colors[static_cast<std::size_t>(sample.worldAxis)];
+          sample.targeted
+              ? std::array<std::uint8_t, 3>{255, 255, 255}
+              : visionAxisColors2D[static_cast<std::size_t>(sample.worldAxis)];
       SDL_SetRenderDrawColor(renderer, color[0], color[1], color[2], 255);
       const SDL_Rect rectangle{stripLeft, runStart, stripWidth,
                                runEnd - runStart};

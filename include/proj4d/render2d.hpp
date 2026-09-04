@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -9,6 +11,10 @@
 namespace proj4d {
 
 inline constexpr int visionLineWidthDivisor = 10;
+inline constexpr std::array<std::array<std::uint8_t, 3>, 2> visionAxisColors2D{{
+    {150, 245, 165},
+    {245, 140, 140},
+}};
 
 struct VisionSample2D {
   bool solid{};

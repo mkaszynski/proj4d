@@ -22,8 +22,8 @@ The vision line spans the screen vertically and is drawn as a centered strip
 whose width is one tenth of its height. This makes projected block edges
 readable as rectangular intervals without widening the line to half of the
 display. Only the nearest solid edge along each sight ray is shown, so terrain
-cannot be seen through other blocks. Red intervals run along `X` and green
-intervals run along `Y`.
+cannot be seen through other blocks. In the reversed 2D palette, green
+intervals run along `X` and red intervals run along `Y`.
 
 Both dimensions offer the same terrain choices:
 

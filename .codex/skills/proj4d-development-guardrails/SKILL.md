@@ -83,7 +83,8 @@ Apply these invariants to every change in the Proj4D repository.
   nearest solid boundary. Never reveal rear blocks or underground cavities
   through nearer terrain.
 - Color each visible boundary interval by the world direction along which it
-  runs: red `X` and green `Y`. Keep the center targeting mark visible.
+  runs, using the reversed 2D palette: green `X` and red `Y`. Keep the center
+  targeting mark visible.
 - Map vertical mouse motion to vertical 2D look, ignore horizontal mouse
   motion, and clamp look at straight up and straight down. Use `Z` to reverse
   the horizontal view and forward direction.

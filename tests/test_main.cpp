@@ -574,6 +574,10 @@ void testTrueTwoDimensionalWorldAndChunks() {
 void testTrueTwoDimensionalProjection() {
   expect(proj4d::visionLineWidthDivisor == 10,
          "the vertical 1D view strip is ten times thinner than it is tall");
+  expect(proj4d::visionAxisColors2D[0][1] > proj4d::visionAxisColors2D[0][0] &&
+             proj4d::visionAxisColors2D[1][0] >
+                 proj4d::visionAxisColors2D[1][1],
+         "2D colors are reversed so X is green and Y is red");
   proj4d::Camera2D camera;
   camera.position = {0.5, 2.5};
   const auto center = camera.project({2.5, 2.5});
@@ -605,7 +609,7 @@ void testTrueTwoDimensionalProjection() {
       sideWorld, sideCamera, 101, 8.0,
       sideTarget ? std::optional(sideTarget->block) : std::nullopt);
   expect(sideLine[50].solid && sideLine[50].worldAxis == 1,
-         "an X-facing block side renders as a green Y edge interval");
+         "an X-facing block side renders as a red Y edge interval");
   expect(sideLine[50].block == proj4d::BlockCoord2D{0, 100},
          "the nearest 2D square hides a farther square on the same sightline");
   expect(sideLine[50].targeted, "the center ray marks the targeted 2D block");
@@ -623,7 +627,7 @@ void testTrueTwoDimensionalProjection() {
   const auto floorLine =
       proj4d::buildVisionLine(floorWorld, floorCamera, 101, 8.0);
   expect(floorLine[50].solid && floorLine[50].worldAxis == 0,
-         "a Y-facing block side renders as a red X edge interval");
+         "a Y-facing block side renders as a green X edge interval");
 }
 
 void testTwoDimensionalPhysicsAndInteraction() {
