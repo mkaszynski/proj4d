@@ -19,8 +19,16 @@ int main(int argc, char **argv) {
       mode = proj4d::RunMode::MenuSmokeTest;
     } else if (argument == "--4d-terrain-menu-smoke-test") {
       mode = proj4d::RunMode::FourDTerrainMenuSmokeTest;
+    } else if (argument == "--3d-terrain-menu-smoke-test") {
+      mode = proj4d::RunMode::ThreeDTerrainMenuSmokeTest;
     } else if (argument == "--2d-terrain-menu-smoke-test") {
       mode = proj4d::RunMode::TwoDTerrainMenuSmokeTest;
+    } else if (argument == "--3d-smoke-test") {
+      mode = proj4d::RunMode::ThreeDFlatSmokeTest;
+    } else if (argument == "--3d-low-smoke-test") {
+      mode = proj4d::RunMode::ThreeDLowSmokeTest;
+    } else if (argument == "--3d-high-smoke-test") {
+      mode = proj4d::RunMode::ThreeDHighSmokeTest;
     } else if (argument == "--2d-smoke-test") {
       mode = proj4d::RunMode::TwoDFlatSmokeTest;
     } else if (argument == "--2d-low-smoke-test") {
@@ -30,11 +38,14 @@ int main(int argc, char **argv) {
     } else if (argument == "--smoke-output" && index + 1 < argc) {
       smokeOutput = argv[++index];
     } else if (argument == "--help") {
-      std::cout << "Proj4D - true projected 4D and 2D block worlds\n\n"
+      std::cout << "Proj4D - true projected 4D, 3D, and 2D block worlds\n\n"
                 << "Usage: proj4d [--smoke-test | --low-smoke-test | "
-                   "--high-smoke-test | --2d-smoke-test | "
+                   "--high-smoke-test | --3d-smoke-test | "
+                   "--3d-low-smoke-test | --3d-high-smoke-test | "
+                   "--2d-smoke-test | "
                    "--2d-low-smoke-test | --2d-high-smoke-test | "
                    "--menu-smoke-test | --4d-terrain-menu-smoke-test | "
+                   "--3d-terrain-menu-smoke-test | "
                    "--2d-terrain-menu-smoke-test]\n"
                 << "              [--smoke-output FILE]\n"
                 << "Alias: --normal-smoke-test selects 4D High terrain.\n";

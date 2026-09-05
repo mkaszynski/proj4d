@@ -1,6 +1,6 @@
 ---
 name: proj4d-development-guardrails
-description: Preserve Proj4D's infinite true 4D world with shared persistent 2D slice play, real 16x16x16x16 chunks, Flat/Low/High saves, native 4D-to-3D and 2D-to-1D vision, bounded streaming performance, tests, and public-repository privacy. Use whenever creating, changing, debugging, reviewing, testing, or releasing the Proj4D repository.
+description: Preserve Proj4D's infinite true 4D world with shared persistent 3D and 2D slice play, real 16x16x16x16 chunks, Flat/Low/High saves, dimension-native projections, bounded performance, tests, and public-repository privacy. Use whenever creating, changing, debugging, reviewing, testing, or releasing the Proj4D repository.
 ---
 
 # Proj4D Development Guardrails
@@ -9,17 +9,17 @@ Apply these invariants to every change in the Proj4D repository.
 
 ## Preserve the Game
 
-- Keep 4D mode genuinely four-dimensional and 2D mode genuinely
-  two-dimensional across coordinates, blocks, cameras, targeting, collision,
-  and interactions. Never implement 2D as a fixed camera over the 4D world.
-- Keep both worlds unbounded horizontally and procedurally generated. Keep
-  terrain infinitely deep along negative `y`.
+- Keep 4D, 3D, and 2D play dimensionally genuine across coordinates, blocks,
+  cameras, targeting, collision, and interactions. Implement 3D and 2D as thin
+  gameplay slices over shared 4D storage, never as fixed cameras over 4D play.
+- Keep all terrain worlds unbounded horizontally and procedurally generated.
+  Keep terrain infinitely deep along negative `y`.
 - Keep the sole generation and storage unit as a real `16x16x16x16` chunk,
   with explicit 4D chunk and local coordinates and correct floor division for
   negative positions. Never restore separately generated or stored 2D chunks.
-- Present a dimension menu with `4D` and `2D` before world creation, followed
-  by a terrain menu with `Flat`, `Low`, and `High`. Support keyboard and mouse
-  selection in both menus.
+- Present a dimension menu with `4D`, `3D`, and `2D` before world creation,
+  followed by a terrain menu with `Flat`, `Low`, and `High`. Support keyboard
+  and mouse selection in both menus.
 - Generate `Flat` as a four-dimensional superflat field: every block at
   `y <= 0` is solid, every block at `y > 0` is air, and the field is unbounded
   across `x`, `z`, and `w` and infinitely deep.
@@ -34,6 +34,9 @@ Apply these invariants to every change in the Proj4D repository.
 - Implement each 2D terrain as a thin view of the authoritative 4D
   `BlockWorld`: `(x,y)` must read and edit `(x,y,0,0)` through the same 4D
   chunks and cache. Never copy or regenerate that plane into separate storage.
+- Implement each 3D terrain as the authoritative `w=0` slice: `(x,y,z)` must
+  read and edit `(x,y,z,0)` through those same chunks and cache. Never add
+  independently generated or stored 3D chunks.
 - Represent each block as a tesseract with eight cubic boundary cells.
 - Render a native 4D perspective view into a solid 3D vision volume. Do not
   replace the view with 3D slices, independent 3D worlds, or fake depth.
@@ -72,6 +75,21 @@ Apply these invariants to every change in the Proj4D repository.
   eye-to-head bounds, a 50-millisecond delta cap, 0.25-block collision
   substeps, and axis-separated 4D wall sliding.
 
+## Preserve Conventional 3D Vision and Play
+
+- Render 3D mode through an ordinary perspective camera into a 2D display on
+  a black background. Use bounded exposed-face meshing, near-plane clipping,
+  and batched triangle rendering; do not use per-screen-pixel world ray
+  tracing or reveal occluded terrain.
+- Color cube faces by their perpendicular world axis: red `X`, green `Y`, and
+  blue `Z`. Give each cube a stable coordinate-derived lighter or darker shade
+  without changing those axis identities. Draw a white wireframe around the
+  selected cube.
+- Use conventional mouse yaw and pitch, clamp pitch at straight up/down, use
+  `W/S` forward/back, `A/D` strafe, `Space` jump, and held `Shift` sneak.
+  Preserve the exact shared physics constants, axis-separated wall sliding,
+  ledge protection, targeting, building, and breaking behavior.
+
 ## Preserve True 2D Vision and Play
 
 - Render 2D mode through a native 2D perspective camera into a 1D first-person
@@ -101,12 +119,12 @@ Apply these invariants to every change in the Proj4D repository.
 
 ## Preserve Shared World Saves
 
-- Keep exactly three persistent world identities: Flat, Low, and High. Both
+- Keep exactly three persistent world identities: Flat, Low, and High. All
   dimension modes must automatically continue the selected terrain's same
-  save; never add separate 2D saves or require save/load menu buttons.
+  save; never add separate 3D or 2D saves or require save/load menu buttons.
 - Persist the authoritative seed, terrain identity, and all 4D edit overrides,
-  including edits outside the 2D slice. A 2D edit must reload in 4D and a 4D
-  edit at `z=0,w=0` must reload in 2D.
+  including edits outside either slice. Slice edits must reload in 4D; 4D
+  edits at `w=0` must reload in 3D, and edits at `z=0,w=0` in 2D.
 - Keep the save format versioned and bounded. Validate its signature, terrain,
   seed, size, coordinate ordering, block values, and checksum before mutating
   the in-memory world. Refuse damaged or mismatched saves without overwriting
@@ -138,13 +156,13 @@ Apply these invariants to every change in the Proj4D repository.
   look rotation does not regenerate chunks or rescan blocks.
 - Add tests for every behavior change, especially shared 4D chunk ownership,
   cross-dimensional save round trips, corrupt-save rejection, terrain-save
-  isolation, 4D basis orthogonality, 2D pitch and direction, menu routing,
+  isolation, 4D basis orthogonality, 3D and 2D camera behavior, menu routing,
   Flat boundaries, Low golden parity with Hypercraft Flat, High density
   determinism, exact 2D terrain cross-sections, deep terrain, occlusion, cache
-  limits, edit survival, both projections, shared physics, and ray interaction.
+  limits, edit survival, all projections, shared physics, and interaction.
 - Run the complete build, CTest suite, and headless graphical smoke tests for
-  the dimension menu, both terrain menus, and Flat, Low, and High in both 4D
-  and 2D before handoff.
+  the dimension menu, all three terrain menus, and Flat, Low, and High in 4D,
+  3D, and 2D before handoff.
 - Treat broken native frame rate or unbounded geometry growth as regressions.
 
 ## Keep the Repository Public-Safe

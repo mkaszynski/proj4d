@@ -11,16 +11,20 @@
 
 #include "proj4d/camera.hpp"
 #include "proj4d/camera2d.hpp"
+#include "proj4d/camera3d.hpp"
 #include "proj4d/chunk.hpp"
 #include "proj4d/mouse_input.hpp"
 #include "proj4d/player_motion.hpp"
 #include "proj4d/player_motion2d.hpp"
+#include "proj4d/player_motion3d.hpp"
 #include "proj4d/render2d.hpp"
+#include "proj4d/render3d.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/terrain_generator.hpp"
 #include "proj4d/view_status.hpp"
 #include "proj4d/world.hpp"
 #include "proj4d/world2d.hpp"
+#include "proj4d/world3d.hpp"
 #include "proj4d/world_save.hpp"
 
 namespace {
@@ -547,7 +551,8 @@ void testTrueFourDimensionalChunks() {
 }
 
 void testTrueTwoDimensionalWorldAndChunks() {
-  expect(proj4d::blockCoord4D({-1, -17}) == proj4d::BlockCoord{-1, -17, 0, 0},
+  expect(proj4d::blockCoord4D(proj4d::BlockCoord2D{-1, -17}) ==
+             proj4d::BlockCoord{-1, -17, 0, 0},
          "2D coordinates map exactly onto the z=0,w=0 4D slice");
 
   constexpr std::array modes{
@@ -588,6 +593,48 @@ void testTrueTwoDimensionalWorldAndChunks() {
          "shared 4D edits survive chunk eviction and regeneration in 2D");
 }
 
+void testTrueThreeDimensionalSharedSlice() {
+  expect(proj4d::blockCoord4D(proj4d::BlockCoord3D{-1, -17, 23}) ==
+             proj4d::BlockCoord{-1, -17, 23, 0},
+         "3D coordinates map exactly onto the w=0 4D slice");
+
+  constexpr std::array modes{
+      proj4d::TerrainMode::Flat,
+      proj4d::TerrainMode::Low,
+      proj4d::TerrainMode::Density,
+  };
+  for (const proj4d::TerrainMode mode : modes) {
+    proj4d::BlockWorld world4D(mode, 2468U, 4U);
+    proj4d::BlockWorld3D world3D(world4D);
+    for (int z = -17; z <= 17; z += 17) {
+      for (int x = -17; x <= 17; x += 17) {
+        expect(world3D.surfaceHeightAt(x, z) ==
+                   world4D.surfaceHeightAt(x, z, 0),
+               "3D terrain is the exact w=0 cross-section of its 4D mode");
+        for (int y = -8; y <= 32; y += 8) {
+          expect(world3D.generatedSolidAt({x, y, z}) ==
+                     world4D.generatedSolidAt({x, y, z, 0}),
+                 "3D solidity delegates to the selected 4D generator");
+        }
+      }
+    }
+  }
+
+  proj4d::BlockWorld sharedWorld(proj4d::TerrainMode::Low, 2468U, 2U);
+  proj4d::BlockWorld3D world(sharedWorld);
+  static_cast<void>(world.isSolid({0, 0, 0}));
+  static_cast<void>(world.isSolid({32, 0, 32}));
+  static_cast<void>(world.isSolid({64, 0, 64}));
+  expect(world.loadedChunkCount() == sharedWorld.loadedChunkCount() &&
+             world.loadedChunkCount() <= world.maximumLoadedChunks(),
+         "3D uses the same bounded 16x16x16x16 chunk cache as 4D");
+  const proj4d::BlockCoord3D edit{1000000, 1000, -1000000};
+  const bool generated = world.generatedSolidAt(edit);
+  expect(world.setSolid(edit, !generated), "a distant 3D cube can be edited");
+  expect(sharedWorld.isSolid({edit.x, edit.y, edit.z, 0}) == !generated,
+         "a 3D edit immediately changes the corresponding 4D tesseract");
+}
+
 void testSharedWorldSaving() {
   TemporaryDirectory temporaryDirectory;
   const std::filesystem::path flatPath =
@@ -605,15 +652,19 @@ void testSharedWorldSaving() {
   constexpr std::uint32_t seed = 2468U;
   proj4d::BlockWorld original(proj4d::TerrainMode::Low, seed, 4U);
   proj4d::BlockWorld2D slice(original);
+  proj4d::BlockWorld3D slice3D(original);
   const proj4d::BlockCoord2D sliceEdit{7, 100};
   const proj4d::BlockCoord2D brokenSliceEdit{9, 0};
   const proj4d::BlockCoord outOfSliceEdit{8, 100, 3, -2};
+  const proj4d::BlockCoord3D threeDimensionalEdit{12, 100, 4};
   expect(slice.setSolid(sliceEdit, true),
          "2D can add an edit to the shared 4D world");
   expect(slice.setSolid(brokenSliceEdit, false),
          "2D can remove a generated block from the shared 4D world");
   expect(original.setSolid(outOfSliceEdit, true),
          "4D can add an edit outside the thin 2D slice");
+  expect(slice3D.setSolid(threeDimensionalEdit, true),
+         "3D can add an edit to the shared w=0 world slice");
 
   std::string error;
   expect(proj4d::saveWorldSave(lowPath, original, error),
@@ -629,13 +680,18 @@ void testSharedWorldSaving() {
              proj4d::WorldLoadStatus::Loaded,
          "selecting the same terrain loads its existing world: " + error);
   proj4d::BlockWorld2D loadedSlice(loaded);
+  proj4d::BlockWorld3D loadedSlice3D(loaded);
   expect(loadedSlice.isSolid(sliceEdit),
          "an edit made in 2D is present after loading the world in 4D");
   expect(!loadedSlice.isSolid(brokenSliceEdit),
          "a block broken in 2D remains absent after loading in 4D");
   expect(loaded.isSolid(outOfSliceEdit),
          "4D edits outside the 2D slice persist without becoming 2D blocks");
-  expect(loaded.edits().size() == 3U,
+  expect(loadedSlice3D.isSolid(threeDimensionalEdit),
+         "an edit made in 3D is present after loading the world in 4D");
+  expect(!loadedSlice.isSolid({threeDimensionalEdit.x, threeDimensionalEdit.y}),
+         "a z-nonzero 3D edit does not leak into the thin 2D slice");
+  expect(loaded.edits().size() == 4U,
          "the save restores exactly the durable world edit overrides");
 
   expect(loaded.setSolid(proj4d::blockCoord4D(sliceEdit), false),
@@ -677,6 +733,181 @@ void testSharedWorldSaving() {
              error == "the world save checksum does not match" &&
              protectedWorld.isSolid({22, 100, 0, 0}),
          "a corrupt save is rejected without replacing the current world");
+}
+
+void testThreeDimensionalProjectionAndVisibleFaces() {
+  proj4d::Camera3D camera;
+  camera.position = {};
+  const auto center = camera.project({2.0, 0.0, 0.0}, 16.0 / 9.0);
+  expect(center && proj4d::nearlyEqual(center->position.x, 0.0) &&
+             proj4d::nearlyEqual(center->position.y, 0.0),
+         "a point ahead projects to the center of the ordinary 2D view");
+  camera.turnHorizontal(0.7);
+  camera.turnVertical(0.4);
+  const std::array<proj4d::Vec3, 3> basis{camera.right(), camera.up(),
+                                          camera.forward()};
+  for (std::size_t left = 0; left < basis.size(); ++left) {
+    expect(proj4d::nearlyEqual(proj4d::length(basis[left]), 1.0, 1.0e-8),
+           "3D camera basis remains normalized");
+    for (std::size_t right = left + 1; right < basis.size(); ++right) {
+      expect(proj4d::nearlyEqual(proj4d::dot(basis[left], basis[right]), 0.0,
+                                 1.0e-8),
+             "3D camera basis remains orthogonal without horizon roll");
+    }
+  }
+  camera.turnVertical(10.0);
+  expect(proj4d::nearlyEqual(camera.verticalPitch(),
+                             proj4d::straightVerticalPitch),
+         "3D vertical mouse look stops at straight up");
+
+  proj4d::BlockWorld backing(proj4d::TerrainMode::Flat, 4300U);
+  proj4d::BlockWorld3D world(backing);
+  static_cast<void>(world.setSolid({0, 100, 0}, true));
+  static_cast<void>(world.setSolid({2, 100, 0}, true));
+  proj4d::Camera3D xCamera;
+  xCamera.position = {-2.0, 100.5, 0.5};
+  const auto xSamples = proj4d::buildVisionImage3D(world, xCamera, 1, 1, 8.0);
+  expect(xSamples[0].solid && xSamples[0].worldAxis == 0 &&
+             xSamples[0].block == proj4d::BlockCoord3D{0, 100, 0},
+         "nearest visible X face is red and hides farther cubes");
+  expect(proj4d::visionFaceColors3D[0][0] > proj4d::visionFaceColors3D[0][1],
+         "X-perpendicular cube faces use the red palette");
+  int darkestShade = 100;
+  int brightestShade = 100;
+  for (int z = -4; z <= 4; ++z) {
+    for (int y = -4; y <= 4; ++y) {
+      for (int x = -4; x <= 4; ++x) {
+        const proj4d::BlockCoord3D block{x, y, z};
+        const int shade = proj4d::blockBrightnessPercent3D(block);
+        darkestShade = std::min(darkestShade, shade);
+        brightestShade = std::max(brightestShade, shade);
+        expect(shade == proj4d::blockBrightnessPercent3D(block),
+               "a 3D cube's color variation stays deterministic");
+      }
+    }
+  }
+  expect(darkestShade < 90 && brightestShade > 110,
+         "3D cubes visibly include darker and brighter color variations");
+  const auto shadedRed = proj4d::visionBlockColor3D(0, {7, -3, 4});
+  const auto shadedGreen = proj4d::visionBlockColor3D(1, {7, -3, 4});
+  const auto shadedBlue = proj4d::visionBlockColor3D(2, {7, -3, 4});
+  expect(shadedRed[0] > shadedRed[1] && shadedGreen[1] > shadedGreen[0] &&
+             shadedBlue[2] > shadedBlue[0],
+         "per-cube shading preserves red X, green Y, and blue Z identities");
+  expect(proj4d::buildCubeSelectionWireframe3D({0, 100, 0}, xCamera, 16.0 / 9.0)
+                 .size() == 12U,
+         "a selected cube receives all twelve white wireframe edges");
+  const auto isolatedFaces = proj4d::buildVisibleFaces3D(world, {0, 100, 0}, 0);
+  expect(isolatedFaces.size() == 6U,
+         "an isolated 3D cube exposes exactly six faces");
+  static_cast<void>(world.setSolid({1, 100, 0}, true));
+  const auto joinedFaces = proj4d::buildVisibleFaces3D(world, {0, 100, 0}, 1);
+  expect(std::none_of(joinedFaces.begin(), joinedFaces.end(),
+                      [](const proj4d::VisibleFace3D &face) {
+                        return face.block == proj4d::BlockCoord3D{0, 100, 0} &&
+                               face.worldAxis == 0 && face.normalDirection == 1;
+                      }),
+         "a solid neighboring cube removes the blocked internal face");
+
+  const proj4d::VisibleFace3D closeAngledFace{
+      {0, 100, 0},
+      0,
+      -1,
+      {{{0.0, 100.0, 0.0},
+        {0.0, 101.0, 0.0},
+        {0.0, 101.0, 1.0},
+        {0.0, 100.0, 1.0}}},
+  };
+  proj4d::Camera3D closeCamera;
+  closeCamera.position = {-0.05, 100.5, -0.05};
+  closeCamera.turnHorizontal(0.78539816339744830962);
+  const auto clipped =
+      proj4d::projectVisibleFaces3D({closeAngledFace}, closeCamera, 16.0 / 9.0);
+  expect(clipped.size() == 1U && clipped[0].vertexCount >= 3U,
+         "a close wall crossing the near plane is clipped instead of erased");
+
+  proj4d::Camera3D yCamera;
+  yCamera.position = {0.5, 103.0, 0.5};
+  yCamera.turnVertical(-proj4d::straightVerticalPitch);
+  const auto ySamples = proj4d::buildVisionImage3D(world, yCamera, 1, 1, 8.0);
+  expect(ySamples[0].solid && ySamples[0].worldAxis == 1 &&
+             proj4d::visionFaceColors3D[1][1] >
+                 proj4d::visionFaceColors3D[1][0],
+         "Y top and bottom faces use the green palette");
+
+  proj4d::Camera3D zCamera;
+  zCamera.position = {0.5, 100.5, -2.0};
+  zCamera.turnHorizontal(1.57079632679489661923);
+  const auto zSamples = proj4d::buildVisionImage3D(world, zCamera, 1, 1, 8.0);
+  expect(zSamples[0].solid && zSamples[0].worldAxis == 2 &&
+             proj4d::visionFaceColors3D[2][2] >
+                 proj4d::visionFaceColors3D[2][0],
+         "Z-perpendicular cube faces use the blue palette");
+}
+
+void testThreeDimensionalPhysicsAndInteraction() {
+  proj4d::BlockWorld backing(proj4d::TerrainMode::Flat, 4301U);
+  proj4d::BlockWorld3D world(backing);
+  proj4d::Camera3D camera;
+  camera.position = {0.5, 1.0 + proj4d::playerEyeHeight, 0.5};
+  const proj4d::Vec3 start = camera.position;
+  proj4d::PlayerMotionState3D motion{0.0, true, start};
+  for (int frame = 0; frame < 60; ++frame) {
+    proj4d::updatePlayerMotion(camera, world, motion, {1.0, 0.0, false}, false,
+                               1.0 / 60.0);
+  }
+  expect(proj4d::nearlyEqual(camera.position.x - start.x,
+                             proj4d::playerWalkSpeed, 1.0e-8),
+         "3D W movement exactly matches 4D walking speed");
+  for (int frame = 0; frame < 60; ++frame) {
+    proj4d::updatePlayerMotion(camera, world, motion, {0.0, 1.0, false}, false,
+                               1.0 / 60.0);
+  }
+  expect(proj4d::nearlyEqual(camera.position.z - start.z,
+                             proj4d::playerWalkSpeed, 1.0e-8),
+         "3D D movement is orthogonal to forward movement");
+
+  double maximumEyeY = camera.position.y;
+  proj4d::updatePlayerMotion(camera, world, motion, {}, true, 1.0 / 120.0);
+  for (int step = 1; step < 240 && !motion.grounded; ++step) {
+    proj4d::updatePlayerMotion(camera, world, motion, {}, false, 1.0 / 120.0);
+    maximumEyeY = std::max(maximumEyeY, camera.position.y);
+  }
+  expect(proj4d::nearlyEqual(maximumEyeY - start.y, proj4d::playerJumpHeight,
+                             0.16),
+         "3D jump height and gravity exactly match the shared physics");
+
+  proj4d::BlockWorld wallBacking(proj4d::TerrainMode::Flat, 4302U);
+  proj4d::BlockWorld3D wallWorld(wallBacking);
+  for (int z = -1; z <= 8; ++z) {
+    static_cast<void>(wallWorld.setSolid({1, 1, z}, true));
+    static_cast<void>(wallWorld.setSolid({1, 2, z}, true));
+  }
+  proj4d::Camera3D wallCamera;
+  wallCamera.position = start;
+  proj4d::PlayerMotionState3D wallMotion{0.0, true, start};
+  for (int frame = 0; frame < 60; ++frame) {
+    proj4d::updatePlayerMotion(wallCamera, wallWorld, wallMotion,
+                               {1.0, 1.0, false}, false, 1.0 / 60.0);
+  }
+  expect(wallCamera.position.x < 0.86 && wallCamera.position.z > 6.0,
+         "3D diagonal movement slides along a blocked cube face");
+
+  proj4d::BlockWorld interactionBacking(proj4d::TerrainMode::Flat, 4303U);
+  proj4d::BlockWorld3D interactionWorld(interactionBacking);
+  static_cast<void>(interactionWorld.setSolid({3, 100, 0}, true));
+  const proj4d::Vec3 origin{0.5, 100.5, 0.5};
+  const proj4d::Vec3 forward{1.0, 0.0, 0.0};
+  const auto hit = proj4d::raycast(interactionWorld, origin, forward, 8.0);
+  expect(hit && hit->block == proj4d::BlockCoord3D{3, 100, 0} &&
+             hit->placement == proj4d::BlockCoord3D{2, 100, 0},
+         "3D ray traversal finds its cube and adjacent build position");
+  const std::array<proj4d::BlockCoord3D, 0> noProtectedBlocks{};
+  expect(proj4d::buildAlongRay(interactionWorld, origin, forward, 8.0,
+                               noProtectedBlocks),
+         "3D right click can build beside the selected cube");
+  expect(proj4d::breakAlongRay(interactionWorld, origin, forward, 8.0),
+         "3D left click can break the nearest selected cube");
 }
 
 void testTrueTwoDimensionalProjection() {
@@ -1148,8 +1379,11 @@ int main() {
     testPlayerSlidesAlongBlockedFaces();
     testPlayerJumpsOneAndAHalfBlocks();
     testTrueFourDimensionalChunks();
+    testTrueThreeDimensionalSharedSlice();
     testTrueTwoDimensionalWorldAndChunks();
     testSharedWorldSaving();
+    testThreeDimensionalProjectionAndVisibleFaces();
+    testThreeDimensionalPhysicsAndInteraction();
     testTrueTwoDimensionalProjection();
     testTwoDimensionalPhysicsAndInteraction();
     testFlatTerrainAndPreservedDensityFunctions();

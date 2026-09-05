@@ -16,17 +16,21 @@ endif()
 add_library(proj4d_core
     src/camera.cpp
     src/camera2d.cpp
+    src/camera3d.cpp
     src/chunk.cpp
     src/coordinates.cpp
     src/mouse_input.cpp
     src/player_motion.cpp
     src/player_motion2d.cpp
+    src/player_motion3d.cpp
     src/render_geometry.cpp
     src/render2d.cpp
+    src/render3d.cpp
     src/terrain_generator.cpp
     src/view_status.cpp
     src/world.cpp
     src/world2d.cpp
+    src/world3d.cpp
     src/world_save.cpp
 )
 target_include_directories(proj4d_core PUBLIC include)

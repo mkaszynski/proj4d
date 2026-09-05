@@ -17,14 +17,18 @@
 
 #include "proj4d/camera.hpp"
 #include "proj4d/camera2d.hpp"
+#include "proj4d/camera3d.hpp"
 #include "proj4d/mouse_input.hpp"
 #include "proj4d/player_motion.hpp"
 #include "proj4d/player_motion2d.hpp"
+#include "proj4d/player_motion3d.hpp"
 #include "proj4d/render2d.hpp"
+#include "proj4d/render3d.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/view_status.hpp"
 #include "proj4d/world.hpp"
 #include "proj4d/world2d.hpp"
+#include "proj4d/world3d.hpp"
 #include "proj4d/world_save.hpp"
 
 namespace proj4d {
@@ -53,13 +57,36 @@ struct FeatureGeometryCache {
 
 enum class WorldDimension {
   Four,
+  Three,
   Two,
 };
 
-constexpr std::array<WorldDimension, 2> dimensionChoices{
+constexpr std::array<WorldDimension, 3> dimensionChoices{
     WorldDimension::Four,
+    WorldDimension::Three,
     WorldDimension::Two,
 };
+
+std::size_t dimensionChoiceIndex(WorldDimension dimension) {
+  for (std::size_t index = 0; index < dimensionChoices.size(); ++index) {
+    if (dimensionChoices[index] == dimension) {
+      return index;
+    }
+  }
+  return 0U;
+}
+
+const char *dimensionName(WorldDimension dimension) {
+  switch (dimension) {
+  case WorldDimension::Four:
+    return "4D";
+  case WorldDimension::Three:
+    return "3D";
+  case WorldDimension::Two:
+    return "2D";
+  }
+  return "4D";
+}
 
 constexpr std::array<TerrainMode, 3> terrainChoices{
     TerrainMode::Flat,
@@ -364,6 +391,28 @@ void drawStatusBar(SDL_Renderer *renderer, const Camera2D &camera, int width) {
                  scale, {224, 236, 248});
 }
 
+std::string formatViewStatus(const Camera3D &camera) {
+  std::ostringstream output;
+  output << std::fixed << std::setprecision(2) << "X:" << camera.position.x
+         << " Y:" << camera.position.y << " Z:" << camera.position.z
+         << " | H:" << std::setprecision(1)
+         << camera.horizontalYaw() * 180.0 / pi
+         << " V:" << camera.verticalPitch() * 180.0 / pi;
+  return output.str();
+}
+
+void drawStatusBar(SDL_Renderer *renderer, const Camera3D &camera, int width) {
+  const int scale = width >= 820 ? 2 : 1;
+  const int barHeight = 9 * scale + 4;
+  const SDL_Rect bar{0, 0, width, barHeight};
+  SDL_SetRenderDrawColor(renderer, 9, 15, 24, 255);
+  SDL_RenderFillRect(renderer, &bar);
+  SDL_SetRenderDrawColor(renderer, 55, 78, 102, 255);
+  SDL_RenderDrawLine(renderer, 0, barHeight - 1, width, barHeight - 1);
+  drawBitmapText(renderer, formatViewStatus(camera), 4 * scale, 2 * scale,
+                 scale, {224, 236, 248});
+}
+
 void drawCenteredBitmapText(SDL_Renderer *renderer, const std::string &text,
                             int centerX, int y, int scale,
                             const std::array<std::uint8_t, 3> &color) {
@@ -388,10 +437,10 @@ SDL_Rect terrainChoiceRect(int width, int height, TerrainMode mode) {
 
 SDL_Rect dimensionChoiceRect(int width, int height, WorldDimension dimension) {
   const int buttonWidth = std::clamp(width - 80, 240, 440);
-  constexpr int buttonHeight = 96;
-  constexpr int buttonSpacing = 124;
-  const int index = dimension == WorldDimension::Four ? 0 : 1;
-  return {(width - buttonWidth) / 2, height / 2 - 112 + index * buttonSpacing,
+  constexpr int buttonHeight = 80;
+  constexpr int buttonSpacing = 94;
+  const int index = static_cast<int>(dimensionChoiceIndex(dimension));
+  return {(width - buttonWidth) / 2, height / 2 - 132 + index * buttonSpacing,
           buttonWidth, buttonHeight};
 }
 
@@ -432,21 +481,20 @@ void drawTerrainChoice(SDL_Renderer *renderer, const SDL_Rect &rectangle,
   switch (mode) {
   case TerrainMode::Flat:
     label = "FLAT";
-    description = dimension == WorldDimension::Four
-                      ? "INFINITE 4D SUPERFLAT Y 0"
-                      : "INFINITE 2D SUPERFLAT Y 0";
+    description =
+        "INFINITE " + std::string(dimensionName(dimension)) + " SUPERFLAT Y 0";
     break;
   case TerrainMode::Low:
     label = "LOW";
-    description = dimension == WorldDimension::Four
-                      ? "4D HYPERCRAFT FLAT TERRAIN"
-                      : "2D HYPERCRAFT FLAT TERRAIN";
+    description =
+        std::string(dimensionName(dimension)) + " HYPERCRAFT FLAT TERRAIN";
     break;
   case TerrainMode::Density:
     label = "HIGH";
-    description = dimension == WorldDimension::Four
-                      ? "ORIGINAL 4D DENSITY TERRAIN"
-                      : "2D DENSITY TERRAIN";
+    description =
+        dimension == WorldDimension::Four
+            ? "ORIGINAL 4D DENSITY TERRAIN"
+            : std::string(dimensionName(dimension)) + " SLICE OF 4D DENSITY";
     break;
   }
   drawMenuButton(renderer, rectangle, label, description, selected);
@@ -464,10 +512,13 @@ void drawDimensionMenu(SDL_Renderer *renderer, WorldDimension selected,
   drawMenuButton(
       renderer, dimensionChoiceRect(width, height, WorldDimension::Four), "4D",
       "4D WORLD TO 3D VISION CUBE", selected == WorldDimension::Four);
+  drawMenuButton(
+      renderer, dimensionChoiceRect(width, height, WorldDimension::Three), "3D",
+      "W 0 SLICE TO 2D VIEW", selected == WorldDimension::Three);
   drawMenuButton(renderer,
                  dimensionChoiceRect(width, height, WorldDimension::Two), "2D",
                  "2D WORLD TO 1D VISION LINE", selected == WorldDimension::Two);
-  drawCenteredBitmapText(renderer, "ARROWS ENTER 4 2 OR CLICK", width / 2,
+  drawCenteredBitmapText(renderer, "ARROWS ENTER 4 3 2 OR CLICK", width / 2,
                          height - 54, 2, {126, 151, 174});
   SDL_RenderPresent(renderer);
 }
@@ -479,8 +530,7 @@ void drawTerrainMenu(SDL_Renderer *renderer, WorldDimension dimension,
 
   const int titleScale = width >= 700 ? 4 : 2;
   drawCenteredBitmapText(
-      renderer,
-      dimension == WorldDimension::Four ? "SELECT 4D WORLD" : "SELECT 2D WORLD",
+      renderer, "SELECT " + std::string(dimensionName(dimension)) + " WORLD",
       width / 2, std::max(32, height / 7), titleScale, {226, 238, 250});
   drawCenteredBitmapText(renderer, "CHOOSE TERRAIN", width / 2,
                          std::max(80, height / 7 + 52), 2, {104, 242, 175});
@@ -514,14 +564,19 @@ std::optional<WorldDimension> chooseWorldDimension(SDL_Renderer *renderer) {
       if (event.type == SDL_KEYDOWN) {
         const SDL_Keycode key = event.key.keysym.sym;
         if (key == SDLK_UP || key == SDLK_LEFT) {
-          selected = WorldDimension::Four;
+          const std::size_t index = dimensionChoiceIndex(selected);
+          selected = dimensionChoices[(index + dimensionChoices.size() - 1U) %
+                                      dimensionChoices.size()];
         } else if (key == SDLK_DOWN || key == SDLK_RIGHT || key == SDLK_TAB) {
-          selected = WorldDimension::Two;
+          selected = dimensionChoices[(dimensionChoiceIndex(selected) + 1U) %
+                                      dimensionChoices.size()];
         } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER ||
                    key == SDLK_SPACE) {
           return selected;
         } else if (key == SDLK_4) {
           return WorldDimension::Four;
+        } else if (key == SDLK_3) {
+          return WorldDimension::Three;
         } else if (key == SDLK_2) {
           return WorldDimension::Two;
         }
@@ -687,6 +742,85 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
   SDL_RenderPresent(renderer);
 }
 
+struct VisionGeometry3D {
+  BlockCoord3D center{};
+  std::uint64_t worldRevision{std::numeric_limits<std::uint64_t>::max()};
+  bool geometryInitialized{};
+  std::vector<VisibleFace3D> faces;
+};
+
+ScreenPoint visionScreenPoint(const Vec2 &point, int width, int height) {
+  return {static_cast<int>(std::lround((point.x + 1.0) * 0.5 * width)),
+          static_cast<int>(std::lround((1.0 - point.y) * 0.5 * height))};
+}
+
+bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
+            const Camera3D &camera, int width, int height,
+            VisionGeometry3D &vision) {
+  const BlockCoord3D center = containingBlock(camera.position);
+  if (!vision.geometryInitialized || vision.center != center ||
+      vision.worldRevision != world.revision()) {
+    vision.center = center;
+    vision.worldRevision = world.revision();
+    vision.faces = buildVisibleFaces3D(world, center);
+    vision.geometryInitialized = true;
+  }
+  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+  SDL_RenderClear(renderer);
+  const double aspectRatio =
+      static_cast<double>(width) / static_cast<double>(height);
+  std::vector<ProjectedFace3D> projected =
+      projectVisibleFaces3D(vision.faces, camera, aspectRatio);
+  std::ranges::sort(projected, std::greater{}, &ProjectedFace3D::depth);
+  std::vector<SDL_Vertex> vertices;
+  std::vector<int> indices;
+  vertices.reserve(projected.size() * 4U);
+  indices.reserve(projected.size() * 6U);
+  for (const ProjectedFace3D &face : projected) {
+    const int firstVertex = static_cast<int>(vertices.size());
+    const auto color = visionBlockColor3D(face.worldAxis, face.block);
+    for (std::size_t corner = 0; corner < face.vertexCount; ++corner) {
+      const Vec2 &point = face.vertices[corner];
+      SDL_Vertex vertex{};
+      vertex.position.x = static_cast<float>((point.x + 1.0) * 0.5 * width);
+      vertex.position.y = static_cast<float>((1.0 - point.y) * 0.5 * height);
+      vertex.color = SDL_Color{color[0], color[1], color[2], 255};
+      vertices.push_back(vertex);
+    }
+    for (std::size_t corner = 1; corner + 1 < face.vertexCount; ++corner) {
+      indices.push_back(firstVertex);
+      indices.push_back(firstVertex + static_cast<int>(corner));
+      indices.push_back(firstVertex + static_cast<int>(corner + 1));
+    }
+  }
+  if (!vertices.empty() &&
+      SDL_RenderGeometry(renderer, nullptr, vertices.data(),
+                         static_cast<int>(vertices.size()), indices.data(),
+                         static_cast<int>(indices.size())) != 0) {
+    return false;
+  }
+
+  if (const auto hit = raycast(world, camera.position, camera.forward(), 8.0)) {
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    for (const Line2D &line :
+         buildCubeSelectionWireframe3D(hit->block, camera, aspectRatio)) {
+      const ScreenPoint from = visionScreenPoint(line.from, width, height);
+      const ScreenPoint to = visionScreenPoint(line.to, width, height);
+      SDL_RenderDrawLine(renderer, from.x, from.y, to.x, to.y);
+    }
+  }
+
+  SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+  constexpr int crosshairRadius = 6;
+  SDL_RenderDrawLine(renderer, width / 2 - crosshairRadius, height / 2,
+                     width / 2 + crosshairRadius, height / 2);
+  SDL_RenderDrawLine(renderer, width / 2, height / 2 - crosshairRadius,
+                     width / 2, height / 2 + crosshairRadius);
+  drawStatusBar(renderer, camera, width);
+  SDL_RenderPresent(renderer);
+  return true;
+}
+
 bool saveRendererBitmap(SDL_Renderer *renderer, int width, int height,
                         const std::string &path) {
   SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(
@@ -700,6 +834,140 @@ bool saveRendererBitmap(SDL_Renderer *renderer, int width, int height,
   const bool saved = result == 0 && SDL_SaveBMP(surface, path.c_str()) == 0;
   SDL_FreeSurface(surface);
   return saved;
+}
+
+int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
+                               TerrainMode terrainMode, bool smokeTest,
+                               const std::string &smokeOutput) {
+  const std::string worldName = terrainModeName(terrainMode);
+  SDL_SetWindowTitle(window, ("Proj4D | 3D " + worldName +
+                              " | Mouse: look | WASD: move | Shift: sneak")
+                                 .c_str());
+  BlockWorld sharedWorld(terrainMode);
+  std::optional<PersistentWorldSession> persistence;
+  if (!smokeTest) {
+    persistence.emplace();
+    std::string saveError;
+    if (!initializePersistentWorld(sharedWorld, *persistence, saveError)) {
+      std::cerr << "Could not open the selected world: " << saveError << '\n';
+      SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "World save error",
+                               saveError.c_str(), window);
+      return 1;
+    }
+  }
+  BlockWorld3D world(sharedWorld);
+  Camera3D camera;
+  const int spawnSurface = world.surfaceHeightAt(0, 0);
+  const Vec3 spawnPosition{
+      0.5,
+      static_cast<double>(spawnSurface + 1) + playerEyeHeight,
+      0.5,
+  };
+  camera.position = spawnPosition;
+  camera.turnVertical(-0.28);
+  PlayerMotionState3D playerMotion{0.0, true, spawnPosition};
+  VisionGeometry3D vision;
+  bool running = true;
+  bool renderFailed = false;
+  std::uint64_t previousCounter = SDL_GetPerformanceCounter();
+
+  if (!smokeTest) {
+    SDL_SetRelativeMouseMode(SDL_TRUE);
+    std::cout << "Proj4D 3D " << worldName << " world (shared w=0 slice)\n"
+              << "Controls:\n"
+              << "  W/S: move forward/backward\n"
+              << "  A/D: move left/right\n"
+              << "  Mouse: look around\n"
+              << "  Space: jump 1.5 blocks\n"
+              << "  Hold Shift: sneak and avoid walking off edges\n"
+              << "  Left click: break a targeted cube\n"
+              << "  Right click: build a cube\n"
+              << "  Escape: quit\n";
+  }
+
+  int frameCount = 0;
+  while (running) {
+    const std::uint64_t counter = SDL_GetPerformanceCounter();
+    const double elapsed = static_cast<double>(counter - previousCounter) /
+                           static_cast<double>(SDL_GetPerformanceFrequency());
+    previousCounter = counter;
+    const double deltaSeconds =
+        smokeTest ? 1.0 / 60.0 : std::min(elapsed, 0.05);
+
+    SDL_Event event{};
+    while (SDL_PollEvent(&event) != 0) {
+      if (event.type == SDL_QUIT ||
+          (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)) {
+        running = false;
+      } else if (event.type == SDL_MOUSEMOTION && !smokeTest) {
+        camera.turnHorizontal(static_cast<double>(event.motion.xrel) *
+                              mouseLookRadiansPerPixel);
+        camera.turnVertical(-static_cast<double>(event.motion.yrel) *
+                            mouseLookRadiansPerPixel);
+      } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+        bool worldChanged = false;
+        if (event.button.button == SDL_BUTTON_LEFT) {
+          worldChanged =
+              breakAlongRay(world, camera.position, camera.forward(), 8.0);
+        } else if (event.button.button == SDL_BUTTON_RIGHT) {
+          const std::array<BlockCoord3D, 2> protectedBlocks{{
+              containingBlock(camera.position),
+              playerLowerBodyBlock(camera.position,
+                                   playerMotion.sneaking
+                                       ? playerSneakCollisionBounds
+                                       : playerCollisionBounds),
+          }};
+          worldChanged = buildAlongRay(world, camera.position, camera.forward(),
+                                       8.0, protectedBlocks);
+        }
+        if (worldChanged && persistence) {
+          static_cast<void>(persistChangedWorld(sharedWorld, *persistence));
+        }
+      }
+    }
+
+    const Uint8 *keys = SDL_GetKeyboardState(nullptr);
+    const PlayerMoveInput3D movement{
+        (keys[SDL_SCANCODE_W] != 0 ? 1.0 : 0.0) -
+            (keys[SDL_SCANCODE_S] != 0 ? 1.0 : 0.0),
+        (keys[SDL_SCANCODE_D] != 0 ? 1.0 : 0.0) -
+            (keys[SDL_SCANCODE_A] != 0 ? 1.0 : 0.0),
+        keys[SDL_SCANCODE_LSHIFT] != 0 || keys[SDL_SCANCODE_RSHIFT] != 0,
+    };
+    updatePlayerMotion(camera, world, playerMotion, movement,
+                       keys[SDL_SCANCODE_SPACE] != 0, deltaSeconds);
+
+    int width = 1;
+    int height = 1;
+    SDL_GetRendererOutputSize(renderer, &width, &height);
+    if (!render(renderer, world, camera, width, height, vision)) {
+      std::cerr << "Could not render the 3D view: " << SDL_GetError() << '\n';
+      renderFailed = true;
+      running = false;
+      continue;
+    }
+
+    ++frameCount;
+    if (!smokeTest && frameCount % 60 == 0) {
+      const std::string title = "Proj4D | 3D " + worldName +
+                                " | shared w=0 slice | loaded " +
+                                std::to_string(world.loadedChunkCount()) +
+                                " | WASD move | Mouse look | Shift sneak";
+      SDL_SetWindowTitle(window, title.c_str());
+    }
+    if (smokeTest && frameCount >= 3) {
+      if (!saveRendererBitmap(renderer, width, height, smokeOutput)) {
+        std::cerr << "Could not save 3D smoke image: " << SDL_GetError()
+                  << '\n';
+        renderFailed = true;
+      }
+      running = false;
+    }
+  }
+
+  const bool saved =
+      !persistence || persistChangedWorld(sharedWorld, *persistence);
+  return renderFailed || !saved ? 1 : 0;
 }
 
 int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
@@ -889,12 +1157,19 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                                    mode == RunMode::TwoDFlatSmokeTest ||
                                    mode == RunMode::TwoDLowSmokeTest ||
                                    mode == RunMode::TwoDHighSmokeTest;
+  const bool threeDimensionalSmoke =
+      mode == RunMode::ThreeDTerrainMenuSmokeTest ||
+      mode == RunMode::ThreeDFlatSmokeTest ||
+      mode == RunMode::ThreeDLowSmokeTest ||
+      mode == RunMode::ThreeDHighSmokeTest;
   std::optional<WorldDimension> selectedDimension;
   if (mode == RunMode::Interactive) {
     selectedDimension = chooseWorldDimension(renderer);
   } else {
-    selectedDimension =
-        twoDimensionalSmoke ? WorldDimension::Two : WorldDimension::Four;
+    selectedDimension = twoDimensionalSmoke
+                            ? WorldDimension::Two
+                            : (threeDimensionalSmoke ? WorldDimension::Three
+                                                     : WorldDimension::Four);
   }
   if (!selectedDimension) {
     SDL_DestroyRenderer(renderer);
@@ -904,6 +1179,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   }
 
   if (mode == RunMode::FourDTerrainMenuSmokeTest ||
+      mode == RunMode::ThreeDTerrainMenuSmokeTest ||
       mode == RunMode::TwoDTerrainMenuSmokeTest) {
     int width = initialWidth;
     int height = initialHeight;
@@ -925,9 +1201,11 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   if (mode == RunMode::Interactive) {
     selectedTerrain = chooseTerrainMode(renderer, *selectedDimension);
   } else if (mode == RunMode::LowSmokeTest ||
+             mode == RunMode::ThreeDLowSmokeTest ||
              mode == RunMode::TwoDLowSmokeTest) {
     selectedTerrain = TerrainMode::Low;
   } else if (mode == RunMode::HighSmokeTest ||
+             mode == RunMode::ThreeDHighSmokeTest ||
              mode == RunMode::TwoDHighSmokeTest) {
     selectedTerrain = TerrainMode::Density;
   } else {
@@ -942,6 +1220,15 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
 
   if (*selectedDimension == WorldDimension::Two) {
     const int result = runTwoDimensionalSession(
+        renderer, window, *selectedTerrain, smokeTest, smokeOutput);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return result;
+  }
+
+  if (*selectedDimension == WorldDimension::Three) {
+    const int result = runThreeDimensionalSession(
         renderer, window, *selectedTerrain, smokeTest, smokeOutput);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
