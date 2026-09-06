@@ -71,6 +71,14 @@ outer guide around the nearby field rather than a cluttered internal grid.
 High and Low render only generated terrain features. Edge colors identify the
 world direction: red `X`, green `Y`, blue `Z`, and purple `W`.
 
+Occlusion is resolved along short intervals of each projected feature edge,
+using exact 4D grid traversal toward the corresponding source points. Adjacent
+visible intervals are merged before drawing. A block can therefore hide part
+of an edge without incorrectly erasing the rest, and an edge whose midpoint is
+clear cannot show a blocked end through nearer terrain. Sampling scales with
+projected length and has a fixed per-edge cap to preserve frame time. The white
+selection wireframe uses the same visibility path.
+
 ## Build and run
 
 Proj4D requires CMake 3.24 or newer, a C++20 compiler, and SDL2.

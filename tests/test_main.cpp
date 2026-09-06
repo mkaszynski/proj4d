@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "proj4d/camera.hpp"
 #include "proj4d/camera2d.hpp"
@@ -61,6 +62,14 @@ void expect(bool condition, const std::string &message) {
     std::cerr << "FAIL: " << message << '\n';
     ++failures;
   }
+}
+
+double totalLineLength(const std::vector<proj4d::Line3> &lines) {
+  double total = 0.0;
+  for (const proj4d::Line3 &line : lines) {
+    total += proj4d::length(line.to - line.from);
+  }
+  return total;
 }
 
 void testCameraProjectionAndRotation() {
@@ -1318,6 +1327,66 @@ void testTerrainOccludesUndergroundCavities() {
          "nearer solid terrain hides an underground cavity boundary");
 }
 
+void testFourDimensionalEdgesArePartiallyOccluded() {
+  const std::array<proj4d::FeatureEdge4D, 1> edge{{
+      {{0.0, 100.0, 5.0, 0.0}, {1.0, 100.0, 5.0, 0.0}, 0},
+  }};
+
+  proj4d::BlockWorld midpointBlockedWorld(proj4d::TerrainMode::Flat, 6100U);
+  expect(midpointBlockedWorld.setSolid({-1, 100, 4, 0}, true),
+         "partial-occlusion fixture can place its midpoint blocker");
+  proj4d::Camera4D midpointBlockedCamera;
+  midpointBlockedCamera.position = {-2.0, 100.5, 0.5, 0.5};
+  const auto midpointFull =
+      proj4d::projectFeatureEdges(edge, midpointBlockedCamera);
+  const auto midpointVisible = proj4d::projectVisibleFeatureEdges(
+      midpointBlockedWorld, edge, midpointBlockedCamera);
+  expect(midpointFull.size() == 1U && !midpointVisible.empty() &&
+             totalLineLength(midpointVisible) < totalLineLength(midpointFull),
+         "a blocker over an edge midpoint hides only the covered interval");
+
+  proj4d::BlockWorld endpointBlockedWorld(proj4d::TerrainMode::Flat, 6101U);
+  expect(endpointBlockedWorld.setSolid({-2, 99, 3, -1}, true),
+         "partial-occlusion fixture can place its endpoint blocker");
+  proj4d::Camera4D endpointBlockedCamera;
+  endpointBlockedCamera.position = {-2.5, 99.25, 0.5, -1.75};
+  const auto endpointFull =
+      proj4d::projectFeatureEdges(edge, endpointBlockedCamera);
+  const auto endpointVisible = proj4d::projectVisibleFeatureEdges(
+      endpointBlockedWorld, edge, endpointBlockedCamera);
+  expect(endpointFull.size() == 1U && !endpointVisible.empty() &&
+             totalLineLength(endpointVisible) < totalLineLength(endpointFull),
+         "a blocker away from an edge midpoint no longer lets the covered "
+         "end show through");
+  expect(proj4d::maximumVisibilitySamplesPerEdge <= 64,
+         "partial 4D edge visibility has a fixed per-edge work bound");
+
+  proj4d::BlockWorld selectedWorld(proj4d::TerrainMode::Flat, 6102U);
+  const proj4d::BlockCoord selectedBlock{0, 100, 5, 0};
+  expect(selectedWorld.setSolid(selectedBlock, true),
+         "selected-wireframe fixture can place its target tesseract");
+  const auto completeSelection =
+      proj4d::buildTesseractWireframe(selectedBlock, midpointBlockedCamera);
+  const auto visibleSelection = proj4d::buildVisibleTesseractWireframe(
+      selectedWorld, selectedBlock, midpointBlockedCamera);
+  expect(!visibleSelection.empty() && totalLineLength(visibleSelection) <
+                                          totalLineLength(completeSelection),
+         "the white selection wireframe is occluded by its solid tesseract");
+
+  proj4d::Camera4D clippingCamera;
+  clippingCamera.position = {};
+  const std::array<proj4d::FeatureEdge4D, 1> nearCrossing{{
+      {{0.1, 0.0, 0.01, 0.0}, {0.1, 0.0, 1.0, 0.0}, 2},
+  }};
+  const std::array<proj4d::FeatureEdge4D, 1> farCrossing{{
+      {{0.1, 0.0, 23.5, 0.0}, {0.1, 0.0, 24.5, 0.0}, 2},
+  }};
+  expect(proj4d::projectFeatureEdges(nearCrossing, clippingCamera).size() == 1U,
+         "an edge crossing the 4D camera near plane is clipped, not erased");
+  expect(proj4d::projectFeatureEdges(farCrossing, clippingCamera).size() == 1U,
+         "an edge crossing the 4D camera far plane is clipped, not erased");
+}
+
 void testRaycastBuildingAndBreaking() {
   proj4d::BlockWorld world(9090U);
   const proj4d::BlockCoord target{0, 1000, 0, 0};
@@ -1392,6 +1461,7 @@ int main() {
     testInfiniteWorldCacheAndEdits();
     testOccludedFacesAndSmoothEdgesAreCulled();
     testTerrainOccludesUndergroundCavities();
+    testFourDimensionalEdgesArePartiallyOccluded();
     testRaycastBuildingAndBreaking();
     testVisionGeometryIsBounded();
   } catch (const std::exception &error) {

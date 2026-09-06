@@ -103,14 +103,10 @@ void appendFlatSurfaceGuide(std::vector<FeatureEdge4D> &edges,
   }
 }
 
-Vec4 edgeMidpoint(const FeatureEdge4D &edge) {
-  return (edge.from + edge.to) * 0.5;
-}
-
 bool hasClearSightline(const BlockWorld &world, const Camera4D &camera,
-                       const FeatureEdge4D &edge) {
+                       const Vec4 &point) {
   constexpr double targetInset = 1.0e-5;
-  const Vec4 offset = edgeMidpoint(edge) - camera.position;
+  const Vec4 offset = point - camera.position;
   const double distance = length(offset);
   if (distance <= camera.nearPlane) {
     return true;
@@ -120,31 +116,175 @@ bool hasClearSightline(const BlockWorld &world, const Camera4D &camera,
   return !obstruction;
 }
 
-std::optional<Line3> projectEdge(const Camera4D &camera, Vec4 from, Vec4 to,
-                                 int worldAxis) {
-  double fromDepth = dot(from - camera.position, camera.forward);
-  double toDepth = dot(to - camera.position, camera.forward);
-  if ((fromDepth > camera.farPlane && toDepth > camera.farPlane) ||
-      (fromDepth < camera.nearPlane && toDepth < camera.nearPlane)) {
-    return std::nullopt;
-  }
-  if (fromDepth < camera.nearPlane || toDepth < camera.nearPlane) {
-    const double amount =
-        (camera.nearPlane - fromDepth) / (toDepth - fromDepth);
-    const Vec4 clipped = lerp(from, to, amount);
-    if (fromDepth < camera.nearPlane) {
-      from = clipped;
-    } else {
-      to = clipped;
+struct ClippedLine3 {
+  Line3 line{};
+  double minimumAmount{};
+  double maximumAmount{1.0};
+};
+
+std::optional<ClippedLine3> clipLineToVisionCubeWithAmounts(Line3 line) {
+  double minimumAmount = 0.0;
+  double maximumAmount = 1.0;
+  const Vec3 delta = line.to - line.from;
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    const double start = line.from[axis];
+    const double change = delta[axis];
+    if (std::abs(change) <= 1.0e-12) {
+      if (start < -1.0 || start > 1.0) {
+        return std::nullopt;
+      }
+      continue;
+    }
+    double first = (-1.0 - start) / change;
+    double second = (1.0 - start) / change;
+    if (first > second) {
+      std::swap(first, second);
+    }
+    minimumAmount = std::max(minimumAmount, first);
+    maximumAmount = std::min(maximumAmount, second);
+    if (minimumAmount > maximumAmount) {
+      return std::nullopt;
     }
   }
-  const auto projectedFrom = camera.project(from);
-  const auto projectedTo = camera.project(to);
+  const Vec3 originalFrom = line.from;
+  line.from = originalFrom + delta * minimumAmount;
+  line.to = originalFrom + delta * maximumAmount;
+  return ClippedLine3{line, minimumAmount, maximumAmount};
+}
+
+double perspectiveParameter(double projectedAmount, double fromDepth,
+                            double toDepth) {
+  const double weightedFrom = (1.0 - projectedAmount) / fromDepth;
+  const double weightedTo = projectedAmount / toDepth;
+  return weightedTo / (weightedFrom + weightedTo);
+}
+
+struct ProjectedSourceEdge {
+  Vec4 sourceFrom{};
+  Vec4 sourceTo{};
+  double fromDepth{};
+  double toDepth{};
+  Line3 line{};
+};
+
+std::optional<ProjectedSourceEdge>
+projectSourceEdge(const Camera4D &camera, const FeatureEdge4D &edge) {
+  constexpr double clippingMargin = 1.0e-7;
+  const Vec4 originalFrom = edge.from;
+  const Vec4 originalTo = edge.to;
+  const double originalFromDepth =
+      dot(originalFrom - camera.position, camera.forward);
+  const double originalToDepth =
+      dot(originalTo - camera.position, camera.forward);
+  const double depthChange = originalToDepth - originalFromDepth;
+  double minimumAmount = 0.0;
+  double maximumAmount = 1.0;
+  if (std::abs(depthChange) <= 1.0e-12) {
+    if (originalFromDepth < camera.nearPlane ||
+        originalFromDepth > camera.farPlane) {
+      return std::nullopt;
+    }
+  } else {
+    double nearAmount =
+        (camera.nearPlane + clippingMargin - originalFromDepth) / depthChange;
+    double farAmount =
+        (camera.farPlane - clippingMargin - originalFromDepth) / depthChange;
+    if (nearAmount > farAmount) {
+      std::swap(nearAmount, farAmount);
+    }
+    minimumAmount = std::max(minimumAmount, nearAmount);
+    maximumAmount = std::min(maximumAmount, farAmount);
+    if (minimumAmount > maximumAmount) {
+      return std::nullopt;
+    }
+  }
+
+  const Vec4 depthClippedFrom = lerp(originalFrom, originalTo, minimumAmount);
+  const Vec4 depthClippedTo = lerp(originalFrom, originalTo, maximumAmount);
+  const double fromDepth =
+      dot(depthClippedFrom - camera.position, camera.forward);
+  const double toDepth = dot(depthClippedTo - camera.position, camera.forward);
+  const auto projectedFrom = camera.project(depthClippedFrom);
+  const auto projectedTo = camera.project(depthClippedTo);
   if (!projectedFrom || !projectedTo) {
     return std::nullopt;
   }
-  return clipLineToVisionCube(
-      {projectedFrom->position, projectedTo->position, worldAxis});
+  const auto clipped = clipLineToVisionCubeWithAmounts(
+      {projectedFrom->position, projectedTo->position, edge.worldAxis});
+  if (!clipped) {
+    return std::nullopt;
+  }
+
+  const double sourceMinimum =
+      perspectiveParameter(clipped->minimumAmount, fromDepth, toDepth);
+  const double sourceMaximum =
+      perspectiveParameter(clipped->maximumAmount, fromDepth, toDepth);
+  const Vec4 sourceFrom = lerp(depthClippedFrom, depthClippedTo, sourceMinimum);
+  const Vec4 sourceTo = lerp(depthClippedFrom, depthClippedTo, sourceMaximum);
+  return ProjectedSourceEdge{
+      sourceFrom,
+      sourceTo,
+      dot(sourceFrom - camera.position, camera.forward),
+      dot(sourceTo - camera.position, camera.forward),
+      clipped->line,
+  };
+}
+
+void appendVisibleFragments(const BlockWorld &world, const Camera4D &camera,
+                            const ProjectedSourceEdge &edge,
+                            std::vector<Line3> &lines) {
+  const Vec3 projectedDelta = edge.line.to - edge.line.from;
+  const int sampleCount =
+      std::clamp(static_cast<int>(std::ceil(length(projectedDelta) *
+                                            visibilitySamplesPerVisionUnit)),
+                 1, maximumVisibilitySamplesPerEdge);
+  std::optional<double> visibleRunStart;
+  for (int sample = 0; sample < sampleCount; ++sample) {
+    const double intervalStart =
+        static_cast<double>(sample) / static_cast<double>(sampleCount);
+    const double intervalEnd =
+        static_cast<double>(sample + 1) / static_cast<double>(sampleCount);
+    const double projectedAmount = (intervalStart + intervalEnd) * 0.5;
+    const double sourceAmount =
+        perspectiveParameter(projectedAmount, edge.fromDepth, edge.toDepth);
+    const Vec4 sourcePoint = lerp(edge.sourceFrom, edge.sourceTo, sourceAmount);
+    const bool visible = hasClearSightline(world, camera, sourcePoint);
+    if (visible && !visibleRunStart) {
+      visibleRunStart = intervalStart;
+    }
+    if (!visible && visibleRunStart) {
+      lines.push_back({edge.line.from + projectedDelta * *visibleRunStart,
+                       edge.line.from + projectedDelta * intervalStart,
+                       edge.line.worldAxis});
+      visibleRunStart.reset();
+    }
+  }
+  if (visibleRunStart) {
+    lines.push_back({edge.line.from + projectedDelta * *visibleRunStart,
+                     edge.line.to, edge.line.worldAxis});
+  }
+}
+
+std::vector<FeatureEdge4D> tesseractEdges(const BlockCoord &block) {
+  std::vector<FeatureEdge4D> edges;
+  edges.reserve(32U);
+  for (int vertexMask = 0; vertexMask < 16; ++vertexMask) {
+    Vec4 from{
+        static_cast<double>(block.x + ((vertexMask & 1) != 0 ? 1 : 0)),
+        static_cast<double>(block.y + ((vertexMask & 2) != 0 ? 1 : 0)),
+        static_cast<double>(block.z + ((vertexMask & 4) != 0 ? 1 : 0)),
+        static_cast<double>(block.w + ((vertexMask & 8) != 0 ? 1 : 0)),
+    };
+    for (int axis = 0; axis < 4; ++axis) {
+      if ((vertexMask & (1 << axis)) != 0) {
+        continue;
+      }
+      Vec4 to = from;
+      to[static_cast<std::size_t>(axis)] += 1.0;
+      edges.push_back({from, to, axis});
+    }
+  }
+  return edges;
 }
 
 } // namespace
@@ -224,33 +364,8 @@ buildVisibleBoundaryCells(const BlockWorld &world, const BlockCoord &center,
 }
 
 std::optional<Line3> clipLineToVisionCube(Line3 line) {
-  double minimumAmount = 0.0;
-  double maximumAmount = 1.0;
-  const Vec3 delta = line.to - line.from;
-  for (std::size_t axis = 0; axis < 3; ++axis) {
-    const double start = line.from[axis];
-    const double change = delta[axis];
-    if (std::abs(change) <= 1.0e-12) {
-      if (start < -1.0 || start > 1.0) {
-        return std::nullopt;
-      }
-      continue;
-    }
-    double first = (-1.0 - start) / change;
-    double second = (1.0 - start) / change;
-    if (first > second) {
-      std::swap(first, second);
-    }
-    minimumAmount = std::max(minimumAmount, first);
-    maximumAmount = std::min(maximumAmount, second);
-    if (minimumAmount > maximumAmount) {
-      return std::nullopt;
-    }
-  }
-  const Vec3 originalFrom = line.from;
-  line.from = originalFrom + delta * minimumAmount;
-  line.to = originalFrom + delta * maximumAmount;
-  return line;
+  const auto clipped = clipLineToVisionCubeWithAmounts(line);
+  return clipped ? std::optional(clipped->line) : std::nullopt;
 }
 
 std::vector<Line3> projectFeatureEdges(std::span<const FeatureEdge4D> edges,
@@ -258,8 +373,8 @@ std::vector<Line3> projectFeatureEdges(std::span<const FeatureEdge4D> edges,
   std::vector<Line3> lines;
   lines.reserve(edges.size());
   for (const FeatureEdge4D &edge : edges) {
-    if (auto line = projectEdge(camera, edge.from, edge.to, edge.worldAxis)) {
-      lines.push_back(*line);
+    if (const auto projected = projectSourceEdge(camera, edge)) {
+      lines.push_back(projected->line);
     }
   }
   return lines;
@@ -272,9 +387,8 @@ projectVisibleFeatureEdges(const BlockWorld &world,
   std::vector<Line3> lines;
   lines.reserve(edges.size());
   for (const FeatureEdge4D &edge : edges) {
-    const auto line = projectEdge(camera, edge.from, edge.to, edge.worldAxis);
-    if (line && hasClearSightline(world, camera, edge)) {
-      lines.push_back(*line);
+    if (const auto projected = projectSourceEdge(camera, edge)) {
+      appendVisibleFragments(world, camera, *projected, lines);
     }
   }
   return lines;
@@ -289,27 +403,13 @@ std::vector<Line3> buildVisionGeometry(const BlockWorld &world,
 
 std::vector<Line3> buildTesseractWireframe(const BlockCoord &block,
                                            const Camera4D &camera) {
-  std::vector<Line3> lines;
-  lines.reserve(32U);
-  for (int vertexMask = 0; vertexMask < 16; ++vertexMask) {
-    Vec4 from{
-        static_cast<double>(block.x + ((vertexMask & 1) != 0 ? 1 : 0)),
-        static_cast<double>(block.y + ((vertexMask & 2) != 0 ? 1 : 0)),
-        static_cast<double>(block.z + ((vertexMask & 4) != 0 ? 1 : 0)),
-        static_cast<double>(block.w + ((vertexMask & 8) != 0 ? 1 : 0)),
-    };
-    for (int axis = 0; axis < 4; ++axis) {
-      if ((vertexMask & (1 << axis)) != 0) {
-        continue;
-      }
-      Vec4 to = from;
-      to[static_cast<std::size_t>(axis)] += 1.0;
-      if (auto line = projectEdge(camera, from, to, axis)) {
-        lines.push_back(*line);
-      }
-    }
-  }
-  return lines;
+  return projectFeatureEdges(tesseractEdges(block), camera);
+}
+
+std::vector<Line3> buildVisibleTesseractWireframe(const BlockWorld &world,
+                                                  const BlockCoord &block,
+                                                  const Camera4D &camera) {
+  return projectVisibleFeatureEdges(world, tesseractEdges(block), camera);
 }
 
 } // namespace proj4d

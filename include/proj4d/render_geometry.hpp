@@ -28,6 +28,8 @@ struct VisibleBoundaryCell4D {
 };
 
 inline constexpr int renderBlockRadius = 6;
+inline constexpr double visibilitySamplesPerVisionUnit = 96.0;
+inline constexpr int maximumVisibilitySamplesPerEdge = 64;
 
 [[nodiscard]] std::vector<VisibleBoundaryCell4D>
 buildVisibleBoundaryCells(const BlockWorld &world, const BlockCoord &center,
@@ -48,5 +50,8 @@ buildVisionGeometry(const BlockWorld &world, const Camera4D &camera,
                     const BlockCoord &center, int radius = renderBlockRadius);
 [[nodiscard]] std::vector<Line3>
 buildTesseractWireframe(const BlockCoord &block, const Camera4D &camera);
+[[nodiscard]] std::vector<Line3>
+buildVisibleTesseractWireframe(const BlockWorld &world, const BlockCoord &block,
+                               const Camera4D &camera);
 
 } // namespace proj4d

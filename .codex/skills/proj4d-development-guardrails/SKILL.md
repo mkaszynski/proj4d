@@ -45,6 +45,10 @@ Apply these invariants to every change in the Proj4D repository.
 - Cull every cubic face whose neighboring tesseract is solid, including across
   chunk boundaries. Preserve exposed faces even when geometry overlaps after
   projection.
+- Resolve occlusion along projected feature-edge intervals. Never make an
+  entire edge visible or hidden from one midpoint ray; retain visible
+  fragments, hide blocked fragments, and keep the per-edge work explicitly
+  bounded. Apply the same depth-tested visibility to selection wireframes.
 - Keep the perfectly smooth `y=0` Flat surface legible with one bounded outer
   wireframe guide around the local render region. Never add that guide to Low
   or High; render their generated terrain feature edges. Do not restore
