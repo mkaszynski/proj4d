@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install SDL2
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Headless graphical smoke tests
+        run: |
+          ./build/proj4d --menu-smoke-test --smoke-output build/dimension-menu.bmp
+          ./build/proj4d --4d-terrain-menu-smoke-test --smoke-output build/4d-terrain-menu.bmp
+          ./build/proj4d --3d-terrain-menu-smoke-test --smoke-output build/3d-terrain-menu.bmp
+          ./build/proj4d --2d-terrain-menu-smoke-test --smoke-output build/2d-terrain-menu.bmp
+          ./build/proj4d --smoke-test --smoke-output build/4d-flat.bmp
+          ./build/proj4d --low-smoke-test --smoke-output build/4d-low.bmp
+          ./build/proj4d --high-smoke-test --smoke-output build/4d-high.bmp
+          ./build/proj4d --3d-smoke-test --smoke-output build/3d-flat.bmp
+          ./build/proj4d --3d-low-smoke-test --smoke-output build/3d-low.bmp
+          ./build/proj4d --3d-high-smoke-test --smoke-output build/3d-high.bmp
+          ./build/proj4d --2d-smoke-test --smoke-output build/2d-flat.bmp
+          ./build/proj4d --2d-low-smoke-test --smoke-output build/2d-low.bmp
+          ./build/proj4d --2d-high-smoke-test --smoke-output build/2d-high.bmp
+      - name: Verify smoke images
+        run: |
+          test -s build/dimension-menu.bmp
+          test -s build/4d-terrain-menu.bmp
+          test -s build/3d-terrain-menu.bmp
+          test -s build/2d-terrain-menu.bmp
+          test -s build/4d-flat.bmp
+          test -s build/4d-low.bmp
+          test -s build/4d-high.bmp
+          test -s build/3d-flat.bmp
+          test -s build/3d-low.bmp
+          test -s build/3d-high.bmp
+          test -s build/2d-flat.bmp
+          test -s build/2d-low.bmp
+          test -s build/2d-high.bmp
