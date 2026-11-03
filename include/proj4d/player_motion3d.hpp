@@ -11,6 +11,7 @@ struct PlayerMotionState3D {
   bool grounded{};
   Vec3 spawnPosition{};
   bool sneaking{};
+  bool swimming{};
 };
 
 struct PlayerMoveInput3D {
@@ -25,6 +26,9 @@ playerLowerBodyBlock(const Vec3 &eyePosition,
 [[nodiscard]] bool
 playerCollidesAt(const BlockWorld3D &world, const Vec3 &eyePosition,
                  PlayerCollisionBounds bounds = playerCollisionBounds);
+[[nodiscard]] bool
+playerIntersectsFluid(const BlockWorld3D &world, const Vec3 &eyePosition,
+                      PlayerCollisionBounds bounds = playerCollisionBounds);
 [[nodiscard]] Vec3
 resolvePlayerMotion(const BlockWorld3D &world, const Vec3 &eyePosition,
                     const Vec3 &desiredMotion,

@@ -41,6 +41,7 @@ projectBoundaryVolumes4D(std::span<const VisibleBoundaryCell4D> cells,
 renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
                        const VolumeDisplayCamera &camera, int displayWidth,
                        int displayHeight,
-                       int maximumWidth = maximumVolumeImageWidth);
+                       int maximumWidth = maximumVolumeImageWidth,
+                       BlockId immersionMaterial = BlockId::air);
 
 } // namespace proj4d

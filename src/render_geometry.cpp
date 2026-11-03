@@ -427,16 +427,23 @@ buildVisibleBoundaryCells(const VisibilityGrid4D &grid,
       for (int y = center.y - radius; y <= center.y + radius; ++y) {
         for (int x = center.x - radius; x <= center.x + radius; ++x) {
           const BlockCoord block{x, y, z, w};
-          if (!grid.isSolid(block)) {
+          const BlockId material = grid.blockAt(block);
+          const bool solid = proj4d::isSolid(material);
+          const bool fluid = isFluid(material);
+          if (!solid && !fluid) {
             continue;
           }
           for (int axis = 0; axis < 4; ++axis) {
             for (const int side : {-1, 1}) {
               BlockCoord neighbor = block;
               neighbor[static_cast<std::size_t>(axis)] += side;
-              if (!grid.isSolid(neighbor)) {
-                visibleCells.push_back(
-                    {block, axis, side, grid.blockAt(block)});
+              const BlockId neighborMaterial = grid.blockAt(neighbor);
+              const bool boundaryHidden =
+                  solid ? proj4d::isSolid(neighborMaterial)
+                        : neighborMaterial == material ||
+                              proj4d::isSolid(neighborMaterial);
+              if (!boundaryHidden) {
+                visibleCells.push_back({block, axis, side, material});
               }
             }
           }

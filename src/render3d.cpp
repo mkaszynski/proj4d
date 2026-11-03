@@ -54,10 +54,12 @@ void appendVisibleBlockFaces(const BlockWorld3D &world,
                              const BlockCoord3D &block,
                              std::vector<VisibleFace3D> &faces,
                              bool generateMissingNeighbors = true) {
-  if (!world.isSolid(block)) {
+  const BlockId material = world.blockAt(block);
+  const bool solid = isSolid(material);
+  const bool fluid = isFluid(material);
+  if (!solid && !fluid) {
     return;
   }
-  const BlockId material = world.blockAt(block);
   for (int axis = 0; axis < 3; ++axis) {
     for (const int direction : {-1, 1}) {
       BlockCoord3D neighbor = block;
@@ -68,7 +70,11 @@ void appendVisibleBlockFaces(const BlockWorld3D &world,
       // Cached chunk geometry cannot stall a frame to generate an unseen
       // neighbor. Missing data is conservatively opaque; the cache is
       // rebuilt when the visible chunk set changes.
-      if (!loadedNeighbor || isSolid(*loadedNeighbor)) {
+      const bool boundaryHidden =
+          !loadedNeighbor ||
+          (solid ? isSolid(*loadedNeighbor)
+                 : *loadedNeighbor == material || isSolid(*loadedNeighbor));
+      if (boundaryHidden) {
         continue;
       }
       std::array<int, 2> tangentAxes{};
@@ -261,7 +267,8 @@ projectVisibleFaces3D(const std::vector<VisibleFace3D> &faces,
     Vec3 outward{};
     outward[static_cast<std::size_t>(face.worldAxis)] =
         static_cast<double>(face.normalDirection);
-    if (dot(camera.position - center, outward) <= 0.0) {
+    if (!isFluid(face.material) &&
+        dot(camera.position - center, outward) <= 0.0) {
       continue;
     }
 

@@ -33,6 +33,7 @@ struct VisionSample2D {
   BlockCoord2D block{};
   bool targeted{};
   BlockId material{BlockId::air};
+  std::array<std::uint8_t, 3> displayColor{};
 };
 
 struct VisibleEdge2D {

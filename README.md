@@ -14,6 +14,9 @@ perspective camera produces a solid 3D image:
 
 Empty in-world space uses a blue sky in every mode, with pale dimension-native
 clouds. In 4D, the external area beyond the 3D vision cube remains black.
+Water and lava are stationary translucent fluid volumes. Their shared internal
+boundaries are removed, opaque terrain remains visible behind them, and entering
+either fluid adds a light immersion tint without turning it into a solid wall.
 
 The 3D mode is the conventional middle view:
 
@@ -91,6 +94,11 @@ Frames never wait for generation and retain the last complete geometry until a
 new visible set is ready. Generation remains deterministic and exact; missing
 data is treated as opaque rather than air.
 
+At initial entry, the streamer prioritizes a smaller exact inner view before
+the full render distance. On the measured Low world this makes the first 4D,
+3D, and 2D geometry available after 8, 4, and 4 chunks respectively, while the
+complete 16, 8, and 16 chunk sets continue loading without blocking frames.
+
 Occlusion is resolved along short intervals of each projected feature edge,
 using exact 4D traversal through a dense bounded occupancy grid toward the
 corresponding source points. The grid reuses overlap when the camera crosses a
@@ -145,6 +153,9 @@ bitmaps for both menus and every playable combination:
 ./build/proj4d --4d-inventory-smoke-test --smoke-output 4d-inventory.bmp
 ./build/proj4d --3d-inventory-smoke-test --smoke-output 3d-inventory.bmp
 ./build/proj4d --2d-inventory-smoke-test --smoke-output 2d-inventory.bmp
+./build/proj4d --4d-fluid-smoke-test --smoke-output 4d-fluid.bmp
+./build/proj4d --3d-fluid-smoke-test --smoke-output 3d-fluid.bmp
+./build/proj4d --2d-fluid-smoke-test --smoke-output 2d-fluid.bmp
 ```
 
 `--normal-smoke-test` remains the compatibility name for the 4D High terrain
@@ -207,8 +218,8 @@ inventory reserves right-drag for rotating its slot cube).
 | `W` / `S` | Move forward or backward along the current 4D viewing direction |
 | `A` / `D` | Move along the first sideways direction, perpendicular to `W` / `S` |
 | `Q` / `E` | Move along the second sideways direction, perpendicular to both other movement directions |
-| `Space` | Jump 1.5 blocks along `Y` |
-| Hold `Shift` | Sneak: crouch, move at 30% speed, and avoid walking off supported edges |
+| `Space` | Jump 1.5 blocks along `Y`; swim upward while in fluid |
+| Hold `Shift` | Sneak on land; swim downward while in fluid |
 | `Up` / `Down` | Look up or down, clamped at straight up and straight down |
 | Mouse left / right | Ordinary horizontal look in the 4D world |
 | Mouse up / down | Fourth-dimensional look |
@@ -232,8 +243,8 @@ vertical (`V`), and fourth-dimensional (`4D`) view angles.
 | `W` / `S` | Move forward or backward |
 | `A` / `D` | Strafe left or right |
 | Mouse | Look around; vertical look is clamped at straight up/down |
-| `Space` | Jump 1.5 blocks along `Y` |
-| Hold `Shift` | Sneak: crouch, move at 30% speed, and avoid walking off supported edges |
+| `Space` | Jump 1.5 blocks along `Y`; swim upward while in fluid |
+| Hold `Shift` | Sneak on land; swim downward while in fluid |
 | `T` | Open the planar inventory/crafting interface |
 | `1`–`9` | Select a visible quick slot |
 | Left mouse button | Mine the targeted cube |
@@ -250,8 +261,8 @@ view angles. The crosshair and targeted-cube wireframe are white.
 | `W` / `S` | Move forward or backward in the current horizontal viewing direction |
 | Mouse up / down | Look up or down, clamped at straight up and straight down |
 | `Z` | Reverse the horizontal view and forward direction |
-| `Space` | Jump 1.5 blocks along `Y` |
-| Hold `Shift` | Sneak: crouch, move at 30% speed, and avoid walking off an edge |
+| `Space` | Jump 1.5 blocks along `Y`; swim upward while in fluid |
+| Hold `Shift` | Sneak on land; swim downward while in fluid |
 | `T` | Open the line inventory/crafting interface |
 | `1`–`3` | Select a visible quick slot |
 | Left mouse button | Mine the targeted square |
@@ -267,7 +278,9 @@ All three modes use the same Hypercraft terrestrial values: a 7-block-per-second
 walk, gravity 36 blocks per second squared, a 1.5-block jump, 0.15-block body
 radius, identical vertical body bounds, a 50-millisecond frame clamp,
 0.25-block collision substeps, axis-separated wall sliding, and held-`Shift`
-sneaking.
+sneaking. In water or lava, movement uses the shared 3.5-block-per-second swim
+speed, reduced gravity and drag; hold `Space` to swim upward and `Shift` to
+descend. Fluids do not flow and do not collide with the player.
 
 ## Architecture
 
@@ -291,6 +304,9 @@ sneaking.
   visibility-cached wireframes, per-chunk 3D exposed-face meshes with batched
   depth-ordered triangles, and per-chunk 2D boundary interval rasterization
   prevent hidden cavities and rear blocks from appearing through solid terrain.
+- Fluid shells share those geometry caches: 4D applies order-independent
+  opacity-weighted path contributions, 3D uses far-to-near alpha blending, and
+  2D depth-sorts and composites every visible interval.
 - The SDL layer owns platform input, menus, final display projection, and
   drawing; simulation and projection truth stay in portable C++.
 - Tests cover all three projections, shared 4D chunk ownership,
@@ -298,7 +314,7 @@ sneaking.
   corruption rejection, exact pinned-Hypercraft terrain parity, material
   colors, dimensional inventories and recipes, tools, clouds, negative
   coordinates, infinite depth, bounded caches, occlusion, movement, sneaking,
-  jumping, targeting, mining, and placement.
+  jumping, fluid transparency and swimming, targeting, mining, and placement.
 
 See the repository's
 [Proj4D development skill](.codex/skills/proj4d-development-guardrails/SKILL.md)

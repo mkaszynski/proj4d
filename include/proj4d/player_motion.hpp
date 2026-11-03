@@ -22,6 +22,10 @@ inline constexpr double playerCollisionEpsilon = 0.0001;
 inline constexpr double playerGroundProbeDistance = 0.04;
 inline constexpr double playerMaximumStepDistance = 0.25;
 inline constexpr double playerMaximumDeltaSeconds = 0.05;
+inline constexpr double playerSwimSpeed = 3.5;
+inline constexpr double playerSwimVerticalSpeed = 4.0;
+inline constexpr double playerFluidGravity = 6.0;
+inline constexpr double playerFluidDrag = 4.0;
 inline constexpr PlayerCollisionBounds playerSneakCollisionBounds{
     playerCollisionBounds.radius,
     playerCollisionBounds.eyeToFeet - playerSneakEyeDrop,
@@ -33,6 +37,7 @@ struct PlayerMotionState {
   bool grounded{};
   Vec4 spawnPosition{};
   bool sneaking{};
+  bool swimming{};
 };
 
 struct PlayerMoveInput {
@@ -50,6 +55,9 @@ playerCollidesAt(const BlockWorld &world, const Vec4 &eyePosition,
                  PlayerCollisionBounds bounds = playerCollisionBounds);
 [[nodiscard]] bool playerCanOccupy(const BlockWorld &world,
                                    const Vec4 &eyePosition);
+[[nodiscard]] bool
+playerIntersectsFluid(const BlockWorld &world, const Vec4 &eyePosition,
+                      PlayerCollisionBounds bounds = playerCollisionBounds);
 [[nodiscard]] Vec4
 resolvePlayerMotion(const BlockWorld &world, const Vec4 &eyePosition,
                     const Vec4 &desiredMotion,

@@ -207,6 +207,7 @@ struct PixelRay {
 struct PreparedVolume {
   VolumePlaneSet planeSet{};
   BlockColor color{};
+  float opacity{1.0F};
   int firstX{};
   int lastX{};
   int firstY{};
@@ -325,7 +326,8 @@ projectBoundaryVolumes4D(std::span<const VisibleBoundaryCell4D> cells,
 AveragedVolumeImage
 renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
                        const VolumeDisplayCamera &camera, int displayWidth,
-                       int displayHeight, int maximumWidth) {
+                       int displayHeight, int maximumWidth,
+                       BlockId immersionMaterial) {
   displayWidth = std::max(1, displayWidth);
   displayHeight = std::max(1, displayHeight);
   maximumWidth = std::clamp(maximumWidth, 1, maximumVolumeImageWidth);
@@ -410,7 +412,8 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
                                  image.height - 1);
     prepared.push_back(
         {*planes, shadedBlockColor(volume.material, volume.brightnessPercent),
-         firstX, lastX, firstY, lastY});
+         static_cast<float>(blockOpacity(volume.material)) / 255.0F, firstX,
+         lastX, firstY, lastY});
   }
 
   const auto renderRows = [&](int rowBegin, int rowEnd) {
@@ -435,11 +438,12 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
                   origin, ray.direction, minimum, maximum)) {
             continue;
           }
-          const float thickness = static_cast<float>(maximum - minimum);
-          red[index] += static_cast<float>(volume.color.red) * thickness;
-          green[index] += static_cast<float>(volume.color.green) * thickness;
-          blue[index] += static_cast<float>(volume.color.blue) * thickness;
-          weight[index] += thickness;
+          const float contribution =
+              static_cast<float>(maximum - minimum) * volume.opacity;
+          red[index] += static_cast<float>(volume.color.red) * contribution;
+          green[index] += static_cast<float>(volume.color.green) * contribution;
+          blue[index] += static_cast<float>(volume.color.blue) * contribution;
+          weight[index] += contribution;
         }
       }
     }
@@ -481,6 +485,24 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
         std::clamp(std::lround(green[index] / weight[index]), 0L, 255L));
     image.rgba[index * 4U + 2U] = static_cast<std::uint8_t>(
         std::clamp(std::lround(blue[index] / weight[index]), 0L, 255L));
+    if (isFluid(immersionMaterial)) {
+      const BlockColor immersionColor = blockColor(immersionMaterial);
+      const int alpha = blockOpacity(immersionMaterial) / 3;
+      image.rgba[index * 4U] = static_cast<std::uint8_t>(
+          (static_cast<int>(immersionColor.red) * alpha +
+           static_cast<int>(image.rgba[index * 4U]) * (255 - alpha) + 127) /
+          255);
+      image.rgba[index * 4U + 1U] = static_cast<std::uint8_t>(
+          (static_cast<int>(immersionColor.green) * alpha +
+           static_cast<int>(image.rgba[index * 4U + 1U]) * (255 - alpha) +
+           127) /
+          255);
+      image.rgba[index * 4U + 2U] = static_cast<std::uint8_t>(
+          (static_cast<int>(immersionColor.blue) * alpha +
+           static_cast<int>(image.rgba[index * 4U + 2U]) * (255 - alpha) +
+           127) /
+          255);
+    }
     image.rgba[index * 4U + 3U] = 255U;
   }
   return image;

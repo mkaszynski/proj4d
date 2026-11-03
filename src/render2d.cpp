@@ -14,10 +14,12 @@ std::vector<VisibleEdge2D> buildVisibleEdges2DChunk(const BlockWorld2D &world,
     for (int x = 0; x < chunkSize; ++x) {
       const BlockCoord2D block{chunk.x * chunkSize + x,
                                chunk.y * chunkSize + y};
-      if (!world.isSolid(block)) {
+      const BlockId material = world.blockAt(block);
+      const bool solid = isSolid(material);
+      const bool fluid = isFluid(material);
+      if (!solid && !fluid) {
         continue;
       }
-      const BlockId material = world.blockAt(block);
       for (int normalAxis = 0; normalAxis < 2; ++normalAxis) {
         const int tangentAxis = 1 - normalAxis;
         for (const int direction : {-1, 1}) {
@@ -28,7 +30,11 @@ std::vector<VisibleEdge2D> buildVisibleEdges2DChunk(const BlockWorld2D &world,
           // Chunk geometry must never synchronously generate an unseen
           // neighbor. Treat missing data as opaque until that chunk enters
           // the visible set and the cache is rebuilt.
-          if (!neighborBlock || isSolid(*neighborBlock)) {
+          const bool boundaryHidden =
+              !neighborBlock ||
+              (solid ? isSolid(*neighborBlock)
+                     : *neighborBlock == material || isSolid(*neighborBlock));
+          if (boundaryHidden) {
             continue;
           }
           Vec2 from{static_cast<double>(block.x), static_cast<double>(block.y)};
@@ -50,9 +56,13 @@ rasterizeVisionEdges2D(std::span<const VisibleEdge2D> edges,
                        std::optional<BlockCoord2D> targetedBlock) {
   sampleCount = std::max(1, sampleCount);
   std::vector<VisionSample2D> samples(static_cast<std::size_t>(sampleCount));
-  for (VisionSample2D &sample : samples) {
-    sample.distance = std::numeric_limits<double>::infinity();
-  }
+  struct Fragment {
+    const VisibleEdge2D *edge{};
+    double depth{};
+    int sample{};
+  };
+  std::vector<Fragment> fragments;
+  fragments.reserve(edges.size() * 4U);
   const Vec2 forward = camera.forward();
   constexpr double clippingMargin = 1.0e-7;
   for (const VisibleEdge2D &edge : edges) {
@@ -126,17 +136,52 @@ rasterizeVisionEdges2D(std::span<const VisibleEdge2D> edges,
         continue;
       }
       const double depth = 1.0 / inverseDepth;
-      VisionSample2D &sample = samples[static_cast<std::size_t>(index)];
-      if (depth >= sample.distance) {
-        continue;
-      }
-      sample = {true,
-                edge.worldAxis,
-                depth,
-                edge.block,
-                targetedBlock && edge.block == *targetedBlock,
-                edge.material};
+      fragments.push_back({&edge, depth, index});
     }
+  }
+  std::ranges::sort(fragments, [](const Fragment &left, const Fragment &right) {
+    return left.sample < right.sample ||
+           (left.sample == right.sample && left.depth > right.depth);
+  });
+  std::size_t firstFragment = 0U;
+  while (firstFragment < fragments.size()) {
+    std::size_t lastFragment = firstFragment + 1U;
+    while (lastFragment < fragments.size() &&
+           fragments[lastFragment].sample == fragments[firstFragment].sample) {
+      ++lastFragment;
+    }
+    const std::size_t index =
+        static_cast<std::size_t>(fragments[firstFragment].sample);
+    std::array<int, 3> color{skyColor.red, skyColor.green, skyColor.blue};
+    VisionSample2D &sample = samples[index];
+    sample.solid = true;
+    sample.distance = std::numeric_limits<double>::infinity();
+    for (std::size_t fragmentIndex = firstFragment;
+         fragmentIndex < lastFragment; ++fragmentIndex) {
+      const Fragment &fragment = fragments[fragmentIndex];
+      const VisibleEdge2D &edge = *fragment.edge;
+      const bool targeted = targetedBlock && edge.block == *targetedBlock;
+      const std::array<std::uint8_t, 3> source =
+          targeted ? std::array<std::uint8_t, 3>{255, 255, 255}
+                   : visionBlockColor2D(edge.material, edge.block);
+      const int alpha = blockOpacity(edge.material);
+      for (std::size_t channel = 0; channel < color.size(); ++channel) {
+        color[channel] = (static_cast<int>(source[channel]) * alpha +
+                          color[channel] * (255 - alpha) + 127) /
+                         255;
+      }
+      sample.targeted = sample.targeted || targeted;
+      if (fragment.depth < sample.distance) {
+        sample.worldAxis = edge.worldAxis;
+        sample.distance = fragment.depth;
+        sample.block = edge.block;
+        sample.material = edge.material;
+      }
+    }
+    for (std::size_t channel = 0; channel < color.size(); ++channel) {
+      sample.displayColor[channel] = static_cast<std::uint8_t>(color[channel]);
+    }
+    firstFragment = lastFragment;
   }
   return samples;
 }
@@ -192,9 +237,12 @@ buildVisionLine(const BlockWorld2D &world, const Camera2D &camera,
     }
     // Crossing an X boundary exposes an edge running along Y, and vice versa.
     const int edgeAxis = hit->boundaryNormalAxis == 0 ? 1 : 0;
-    samples.push_back({true, edgeAxis, hit->distance, hit->block,
-                       targetedBlock && hit->block == *targetedBlock,
-                       world.blockAt(hit->block)});
+    const BlockId material = world.blockAt(hit->block);
+    const bool targeted = targetedBlock && hit->block == *targetedBlock;
+    samples.push_back({true, edgeAxis, hit->distance, hit->block, targeted,
+                       material,
+                       targeted ? std::array<std::uint8_t, 3>{255, 255, 255}
+                                : visionBlockColor2D(material, hit->block)});
   }
   return samples;
 }
