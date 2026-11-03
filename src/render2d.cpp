@@ -30,6 +30,11 @@ std::array<std::uint8_t, 3> visionBlockColor2D(int worldAxis,
   return result;
 }
 
+std::array<std::uint8_t, 3> visionBlockColor2D(BlockId material,
+                                               const BlockCoord2D &block) {
+  return shadedBlockColor(material, blockBrightnessPercent2D(block)).array();
+}
+
 std::vector<VisionSample2D>
 buildVisionLine(const BlockWorld2D &world, const Camera2D &camera,
                 int sampleCount, double maximumDistance,
@@ -52,7 +57,8 @@ buildVisionLine(const BlockWorld2D &world, const Camera2D &camera,
     // Crossing an X boundary exposes an edge running along Y, and vice versa.
     const int edgeAxis = hit->boundaryNormalAxis == 0 ? 1 : 0;
     samples.push_back({true, edgeAxis, hit->distance, hit->block,
-                       targetedBlock && hit->block == *targetedBlock});
+                       targetedBlock && hit->block == *targetedBlock,
+                       world.blockAt(hit->block)});
   }
   return samples;
 }

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <future>
 #include <limits>
 #include <stdexcept>
 
@@ -23,9 +24,9 @@ Chunk &BlockWorld::ensureChunk(const ChunkCoord &coordinate) const {
   }
 
   Chunk generated = generator_.generateChunk(coordinate);
-  for (const auto &[block, solid] : overrides_) {
+  for (const auto &[block, material] : overrides_) {
     if (chunkCoordForBlock(block) == coordinate) {
-      generated.setSolid(localCoordForBlock(block), solid);
+      generated.setBlock(localCoordForBlock(block), material);
     }
   }
   auto [inserted, wasInserted] = chunks_.try_emplace(
@@ -55,9 +56,17 @@ void BlockWorld::evictLeastRecentlyUsed(
   }
 }
 
-bool BlockWorld::isSolid(const BlockCoord &coordinate) const {
+BlockId BlockWorld::blockAt(const BlockCoord &coordinate) const {
   Chunk &chunk = ensureChunk(chunkCoordForBlock(coordinate));
-  return chunk.isSolid(localCoordForBlock(coordinate));
+  return chunk.blockAt(localCoordForBlock(coordinate));
+}
+
+BlockId BlockWorld::generatedBlockAt(const BlockCoord &coordinate) const {
+  return generator_.generatedBlockAt(coordinate);
+}
+
+bool BlockWorld::isSolid(const BlockCoord &coordinate) const {
+  return proj4d::isSolid(blockAt(coordinate));
 }
 
 bool BlockWorld::generatedSolidAt(const BlockCoord &coordinate) const {
@@ -65,17 +74,21 @@ bool BlockWorld::generatedSolidAt(const BlockCoord &coordinate) const {
 }
 
 bool BlockWorld::setSolid(const BlockCoord &coordinate, bool solid) {
-  if (isSolid(coordinate) == solid) {
+  return setBlock(coordinate, solid ? BlockId::stone : BlockId::air);
+}
+
+bool BlockWorld::setBlock(const BlockCoord &coordinate, BlockId block) {
+  if (blockAt(coordinate) == block) {
     return false;
   }
-  const bool generated = generator_.generatedSolidAt(coordinate);
-  if (solid == generated) {
+  const BlockId generated = generator_.generatedBlockAt(coordinate);
+  if (block == generated) {
     overrides_.erase(coordinate);
   } else {
-    overrides_[coordinate] = solid;
+    overrides_[coordinate] = block;
   }
   Chunk &chunk = ensureChunk(chunkCoordForBlock(coordinate));
-  chunk.setSolid(localCoordForBlock(coordinate), solid);
+  chunk.setBlock(localCoordForBlock(coordinate), block);
   ++revision_;
   return true;
 }
@@ -99,18 +112,65 @@ std::uint64_t BlockWorld::revision() const { return revision_; }
 std::vector<BlockEdit> BlockWorld::edits() const {
   std::vector<BlockEdit> result;
   result.reserve(overrides_.size());
-  for (const auto &[coordinate, solid] : overrides_) {
-    result.push_back({coordinate, solid});
+  for (const auto &[coordinate, block] : overrides_) {
+    result.emplace_back(coordinate, block);
   }
   return result;
 }
 
+void BlockWorld::prefetchRegion(const BlockCoord &center, int radius) const {
+  radius = std::max(0, radius);
+  const BlockCoord minimum{center.x - radius - 1, center.y - radius - 1,
+                           center.z - radius - 1, center.w - radius - 1};
+  const BlockCoord maximum{center.x + radius + 1, center.y + radius + 1,
+                           center.z + radius + 1, center.w + radius + 1};
+  const ChunkCoord first = chunkCoordForBlock(minimum);
+  const ChunkCoord last = chunkCoordForBlock(maximum);
+  std::vector<ChunkCoord> missing;
+  for (int w = first.w; w <= last.w; ++w) {
+    for (int z = first.z; z <= last.z; ++z) {
+      for (int y = first.y; y <= last.y; ++y) {
+        for (int x = first.x; x <= last.x; ++x) {
+          const ChunkCoord coordinate{x, y, z, w};
+          if (!chunks_.contains(coordinate)) {
+            missing.push_back(coordinate);
+          }
+        }
+      }
+    }
+  }
+  if (missing.empty()) {
+    return;
+  }
+
+  std::vector<std::future<Chunk>> work;
+  work.reserve(missing.size());
+  for (const ChunkCoord coordinate : missing) {
+    work.push_back(std::async(std::launch::async, [this, coordinate] {
+      TerrainGenerator independent(seed(), terrainMode());
+      return independent.generateChunk(coordinate);
+    }));
+  }
+  for (std::size_t index = 0; index < missing.size(); ++index) {
+    Chunk generated = work[index].get();
+    const ChunkCoord coordinate = missing[index];
+    for (const auto &[block, material] : overrides_) {
+      if (chunkCoordForBlock(block) == coordinate) {
+        generated.setBlock(localCoordForBlock(block), material);
+      }
+    }
+    chunks_.try_emplace(coordinate,
+                        CachedChunk{std::move(generated), ++accessClock_});
+    evictLeastRecentlyUsed(coordinate);
+  }
+}
+
 void BlockWorld::replaceEdits(std::span<const BlockEdit> edits) {
-  std::unordered_map<BlockCoord, bool, BlockCoordHash> replacements;
+  std::unordered_map<BlockCoord, BlockId, BlockCoordHash> replacements;
   replacements.reserve(edits.size());
   for (const BlockEdit &edit : edits) {
-    if (edit.solid != generator_.generatedSolidAt(edit.coordinate)) {
-      replacements[edit.coordinate] = edit.solid;
+    if (edit.block != generator_.generatedBlockAt(edit.coordinate)) {
+      replacements[edit.coordinate] = edit.block;
     }
   }
   overrides_ = std::move(replacements);

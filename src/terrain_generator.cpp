@@ -135,7 +135,9 @@ double hypercraftGradientDot4D(int x, int y, int z, int w, double dx, double dy,
 } // namespace
 
 TerrainGenerator::TerrainGenerator(std::uint32_t seed, TerrainMode mode)
-    : seed_(seed), mode_(mode) {}
+    : seed_(seed), mode_(mode),
+      lowGenerator_(seed, hypercraft::WorldGenerationType::flat),
+      highGenerator_(seed, hypercraft::WorldGenerationType::normal) {}
 
 std::uint32_t TerrainGenerator::seed() const { return seed_; }
 
@@ -374,6 +376,29 @@ bool TerrainGenerator::hypercraftFlatSolidAt(const BlockCoord &coordinate,
   return hypercraftFlatDensityAt(coordinate, heightGuide) > 0.0;
 }
 
+BlockId TerrainGenerator::flatOreBlockAt(const BlockCoord &coordinate) const {
+  if (coordinate.y >= flatGroundSurfaceY - 4) {
+    return BlockId::stone;
+  }
+  const std::uint32_t roll =
+      hypercraftHash4D(coordinate.x, coordinate.y, coordinate.z, coordinate.w,
+                       seed_ ^ 0x4F524553U) %
+      10000U;
+  if (roll < 80U) {
+    return BlockId::coal_ore;
+  }
+  if (roll < 110U) {
+    return BlockId::iron_ore;
+  }
+  if (roll < 135U) {
+    return BlockId::copper_ore;
+  }
+  if (roll < 150U) {
+    return BlockId::tin_ore;
+  }
+  return BlockId::stone;
+}
+
 double TerrainGenerator::densityAt(const BlockCoord &coordinate) const {
   const double x = static_cast<double>(coordinate.x);
   const double y = static_cast<double>(coordinate.y);
@@ -385,58 +410,90 @@ double TerrainGenerator::densityAt(const BlockCoord &coordinate) const {
          terrainNoise * 4.2;
 }
 
-bool TerrainGenerator::generatedSolidAt(const BlockCoord &coordinate) const {
-  if (mode_ == TerrainMode::Density) {
-    return densityAt(coordinate) > 0.0;
-  }
+BlockId TerrainGenerator::generatedBlockAt(const BlockCoord &coordinate) const {
   if (mode_ == TerrainMode::Low) {
-    return hypercraftFlatSolidAt(
-        coordinate,
-        hypercraftFlatHeightGuideAt(coordinate.x, coordinate.z, coordinate.w));
+    const ChunkCoord chunkCoordinate = chunkCoordForBlock(coordinate);
+    const LocalBlockCoord local = localCoordForBlock(coordinate);
+    return ensureDecoratedChunk(chunkCoordinate).blockAt(local);
   }
-  return coordinate.y <= flatGroundSurfaceY;
+  if (mode_ == TerrainMode::Density) {
+    const ChunkCoord chunkCoordinate = chunkCoordForBlock(coordinate);
+    const LocalBlockCoord local = localCoordForBlock(coordinate);
+    return ensureDecoratedChunk(chunkCoordinate).blockAt(local);
+  }
+  if (coordinate.y > flatGroundSurfaceY) {
+    return BlockId::air;
+  }
+  if (coordinate.y == flatGroundSurfaceY) {
+    return BlockId::grass;
+  }
+  if (coordinate.y >= flatGroundSurfaceY - 4) {
+    return BlockId::dirt;
+  }
+  return flatOreBlockAt(coordinate);
+}
+
+bool TerrainGenerator::generatedSolidAt(const BlockCoord &coordinate) const {
+  return isSolid(generatedBlockAt(coordinate));
 }
 
 int TerrainGenerator::surfaceHeightAt(int x, int z, int w) const {
   if (mode_ == TerrainMode::Flat) {
     return flatGroundSurfaceY;
   }
-  if (mode_ == TerrainMode::Low) {
-    const double heightGuide = hypercraftFlatHeightGuideAt(x, z, w);
-    const int baseHeight = static_cast<int>(heightGuide);
-    return hypercraftFlatSolidAt({x, baseHeight + 1, z, w}, heightGuide)
-               ? baseHeight + 1
-               : baseHeight;
-  }
-  constexpr int maximumSurfaceSearch = 96;
-  constexpr int minimumSurfaceSearch = -96;
-  for (int y = maximumSurfaceSearch; y >= minimumSurfaceSearch; --y) {
-    if (generatedSolidAt({x, y, z, w})) {
-      return y;
-    }
-  }
-  return minimumSurfaceSearch;
+  return mode_ == TerrainMode::Low ? lowGenerator_.height_at(x, z, w)
+                                   : highGenerator_.height_at(x, z, w);
 }
 
-Chunk TerrainGenerator::generateChunk(const ChunkCoord &coordinate) const {
+const Chunk &
+TerrainGenerator::ensureDecoratedChunk(const ChunkCoord &coordinate) const {
+  if (auto existing = generatedChunkCache_.find(coordinate);
+      existing != generatedChunkCache_.end()) {
+    existing->second.lastAccess = ++generatedChunkAccessClock_;
+    return existing->second.chunk;
+  }
   Chunk chunk(coordinate);
-  if (mode_ == TerrainMode::Low) {
+  {
+    const hypercraft::Chunk source =
+        (mode_ == TerrainMode::Low ? lowGenerator_ : highGenerator_)
+            .generate_chunk(
+                {coordinate.x, coordinate.y, coordinate.z, coordinate.w});
     for (int w = 0; w < chunkSize; ++w) {
-      for (int z = 0; z < chunkSize; ++z) {
-        for (int x = 0; x < chunkSize; ++x) {
-          const BlockCoord column =
-              blockCoordFromChunkLocal(coordinate, LocalBlockCoord{x, 0, z, w});
-          const double heightGuide =
-              hypercraftFlatHeightGuideAt(column.x, column.z, column.w);
-          for (int y = 0; y < chunkSize; ++y) {
+      for (int y = 0; y < chunkSize; ++y) {
+        for (int z = 0; z < chunkSize; ++z) {
+          for (int x = 0; x < chunkSize; ++x) {
             const LocalBlockCoord local{x, y, z, w};
-            const BlockCoord block =
-                blockCoordFromChunkLocal(coordinate, local);
-            chunk.setSolid(local, hypercraftFlatSolidAt(block, heightGuide));
+            chunk.setBlock(local, source.block_at({x, y, z, w}));
           }
         }
       }
     }
+  }
+  constexpr std::size_t maximumGeneratedChunkCache = 8U;
+  if (generatedChunkCache_.size() >= maximumGeneratedChunkCache) {
+    auto oldest = generatedChunkCache_.begin();
+    for (auto current = generatedChunkCache_.begin();
+         current != generatedChunkCache_.end(); ++current) {
+      if (current->second.lastAccess < oldest->second.lastAccess) {
+        oldest = current;
+      }
+    }
+    generatedChunkCache_.erase(oldest);
+  }
+  auto [inserted, wasInserted] = generatedChunkCache_.try_emplace(
+      coordinate,
+      CachedGeneratedChunk{std::move(chunk), ++generatedChunkAccessClock_});
+  static_cast<void>(wasInserted);
+  return inserted->second.chunk;
+}
+
+Chunk TerrainGenerator::generateChunk(const ChunkCoord &coordinate) const {
+  if (mode_ != TerrainMode::Flat) {
+    return ensureDecoratedChunk(coordinate);
+  }
+  Chunk chunk(coordinate);
+  const int minimumY = coordinate.y * chunkSize;
+  if (minimumY > flatGroundSurfaceY) {
     return chunk;
   }
   for (int w = 0; w < chunkSize; ++w) {
@@ -445,7 +502,16 @@ Chunk TerrainGenerator::generateChunk(const ChunkCoord &coordinate) const {
         for (int x = 0; x < chunkSize; ++x) {
           const LocalBlockCoord local{x, y, z, w};
           const BlockCoord block = blockCoordFromChunkLocal(coordinate, local);
-          chunk.setSolid(local, generatedSolidAt(block));
+          if (block.y > flatGroundSurfaceY) {
+            continue;
+          }
+          if (block.y == flatGroundSurfaceY) {
+            chunk.setBlock(local, BlockId::grass);
+          } else if (block.y >= flatGroundSurfaceY - 4) {
+            chunk.setBlock(local, BlockId::dirt);
+          } else {
+            chunk.setBlock(local, flatOreBlockAt(block));
+          }
         }
       }
     }

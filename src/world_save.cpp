@@ -16,12 +16,20 @@ namespace {
 constexpr std::array<std::uint8_t, 8> saveMagic{
     'P', 'R', 'O', 'J', '4', 'D', 'W', 'S',
 };
-constexpr std::uint32_t saveFormatVersion = 1U;
+constexpr std::uint32_t saveFormatVersion = 3U;
+constexpr std::uint32_t legacyBooleanSaveFormatVersion = 1U;
+constexpr std::uint32_t materialOnlySaveFormatVersion = 2U;
 constexpr std::uint64_t fnvOffset = 1469598103934665603ULL;
 constexpr std::uint64_t fnvPrime = 1099511628211ULL;
 constexpr std::uintmax_t maximumSaveBytes = 512ULL * 1024ULL * 1024ULL;
 constexpr std::uintmax_t fixedSaveBytes = 36U;
 constexpr std::uintmax_t bytesPerEdit = 17U;
+constexpr std::uintmax_t bytesPerStack = 9U;
+constexpr std::uintmax_t savedStackCount = storageSlotCount + quickSlotCount +
+                                           handCraftSlotCount +
+                                           tableCraftSlotCount + 1U;
+constexpr std::uintmax_t inventorySaveBytes =
+    savedStackCount * bytesPerStack + 4U;
 
 void hashByte(std::uint64_t &hash, std::uint8_t value) {
   hash ^= value;
@@ -69,6 +77,39 @@ bool readUnsigned(std::istream &input, std::uint64_t &value,
     }
     value |= static_cast<std::uint64_t>(current) << (byte * 8U);
   }
+  return true;
+}
+
+bool writeStack(std::ostream &output, ItemStack stack, std::uint64_t *hash) {
+  stack = normalizedStack(stack);
+  return writeByte(output, static_cast<std::uint8_t>(stack.item), hash) &&
+         writeUnsigned(output, static_cast<std::uint32_t>(stack.count), 4U,
+                       hash) &&
+         writeUnsigned(output, static_cast<std::uint32_t>(stack.durability), 4U,
+                       hash);
+}
+
+bool readStack(std::istream &input, ItemStack &stack, std::uint64_t *hash) {
+  std::uint8_t item{};
+  std::uint64_t count{};
+  std::uint64_t durability{};
+  if (!readByte(input, item, hash) || !readUnsigned(input, count, 4U, hash) ||
+      !readUnsigned(input, durability, 4U, hash)) {
+    return false;
+  }
+  const BlockId block = static_cast<BlockId>(item);
+  if (!isKnownBlock(block) ||
+      count > static_cast<std::uint64_t>(maximumStackSize(block)) ||
+      durability >
+          static_cast<std::uint64_t>(std::max(0, maximumDurability(block)))) {
+    return false;
+  }
+  const ItemStack candidate{block, static_cast<int>(count),
+                            static_cast<int>(durability)};
+  if (normalizedStack(candidate) != candidate) {
+    return false;
+  }
+  stack = candidate;
   return true;
 }
 
@@ -148,7 +189,7 @@ std::filesystem::path worldSaveFilename(TerrainMode mode) {
 }
 
 bool saveWorldSave(const std::filesystem::path &path, const BlockWorld &world,
-                   std::string &error) {
+                   std::string &error, const InventoryState *inventory) {
   error.clear();
   std::error_code directoryError;
   if (!path.parent_path().empty()) {
@@ -163,7 +204,8 @@ bool saveWorldSave(const std::filesystem::path &path, const BlockWorld &world,
   std::vector<BlockEdit> edits = world.edits();
   std::sort(edits.begin(), edits.end(), coordinateLess);
   const std::uintmax_t editCount = edits.size();
-  if (editCount > (maximumSaveBytes - fixedSaveBytes) / bytesPerEdit) {
+  if (editCount >
+      (maximumSaveBytes - fixedSaveBytes - inventorySaveBytes) / bytesPerEdit) {
     error = "the world contains too many edits for this save format";
     return false;
   }
@@ -194,8 +236,30 @@ bool saveWorldSave(const std::filesystem::path &path, const BlockWorld &world,
         output, static_cast<std::uint32_t>(edit.coordinate.z), 4U, &hash));
     static_cast<void>(writeUnsigned(
         output, static_cast<std::uint32_t>(edit.coordinate.w), 4U, &hash));
-    static_cast<void>(writeByte(output, edit.solid ? 1U : 0U, &hash));
+    static_cast<void>(
+        writeByte(output, static_cast<std::uint8_t>(edit.block), &hash));
   }
+  const InventoryState emptyInventory;
+  const InventoryState &savedInventory =
+      inventory != nullptr ? *inventory : emptyInventory;
+  for (const ItemStack &stack : savedInventory.storage) {
+    static_cast<void>(writeStack(output, stack, &hash));
+  }
+  for (const ItemStack &stack : savedInventory.quick) {
+    static_cast<void>(writeStack(output, stack, &hash));
+  }
+  for (const ItemStack &stack : savedInventory.handCrafting) {
+    static_cast<void>(writeStack(output, stack, &hash));
+  }
+  for (const ItemStack &stack : savedInventory.tableCrafting) {
+    static_cast<void>(writeStack(output, stack, &hash));
+  }
+  static_cast<void>(writeStack(output, savedInventory.cursor, &hash));
+  static_cast<void>(
+      writeUnsigned(output,
+                    static_cast<std::uint32_t>(std::clamp(
+                        savedInventory.selectedQuick, 0, quickSlotCount - 1)),
+                    4U, &hash));
   static_cast<void>(writeUnsigned(output, hash, 8U, nullptr));
   output.flush();
   if (!output) {
@@ -210,7 +274,8 @@ bool saveWorldSave(const std::filesystem::path &path, const BlockWorld &world,
 }
 
 WorldLoadStatus loadWorldSave(const std::filesystem::path &path,
-                              BlockWorld &world, std::string &error) {
+                              BlockWorld &world, std::string &error,
+                              InventoryState *inventory) {
   error.clear();
   std::error_code existsError;
   const bool exists = std::filesystem::exists(path, existsError);
@@ -253,7 +318,9 @@ WorldLoadStatus loadWorldSave(const std::filesystem::path &path,
     error = "the world save header is incomplete";
     return WorldLoadStatus::Error;
   }
-  if (version != saveFormatVersion) {
+  if (version != saveFormatVersion &&
+      version != materialOnlySaveFormatVersion &&
+      version != legacyBooleanSaveFormatVersion) {
     error = "the world save uses an unsupported format version";
     return WorldLoadStatus::Error;
   }
@@ -262,8 +329,11 @@ WorldLoadStatus loadWorldSave(const std::filesystem::path &path,
     error = "the world save belongs to a different terrain world";
     return WorldLoadStatus::Error;
   }
-  if (editCount > (maximumSaveBytes - fixedSaveBytes) / bytesPerEdit ||
-      fileSize != fixedSaveBytes + editCount * bytesPerEdit) {
+  const std::uintmax_t expectedFixedBytes =
+      version == saveFormatVersion ? fixedSaveBytes + inventorySaveBytes
+                                   : fixedSaveBytes;
+  if (editCount > (maximumSaveBytes - expectedFixedBytes) / bytesPerEdit ||
+      fileSize != expectedFixedBytes + editCount * bytesPerEdit) {
     error = "the world save edit count does not match its size";
     return WorldLoadStatus::Error;
   }
@@ -273,14 +343,23 @@ WorldLoadStatus loadWorldSave(const std::filesystem::path &path,
   std::optional<BlockCoord> previous;
   for (std::uint64_t index = 0; index < editCount; ++index) {
     std::array<std::uint64_t, 4> coordinates{};
-    std::uint8_t solid{};
+    std::uint8_t savedBlock{};
     for (std::uint64_t &coordinate : coordinates) {
       if (!readUnsigned(input, coordinate, 4U, &hash)) {
         error = "the world save ends inside an edit";
         return WorldLoadStatus::Error;
       }
     }
-    if (!readByte(input, solid, &hash) || solid > 1U) {
+    if (!readByte(input, savedBlock, &hash)) {
+      error = "the world save contains an invalid block value";
+      return WorldLoadStatus::Error;
+    }
+    const BlockId block =
+        version == legacyBooleanSaveFormatVersion
+            ? (savedBlock == 0U ? BlockId::air : BlockId::stone)
+            : static_cast<BlockId>(savedBlock);
+    if ((version == legacyBooleanSaveFormatVersion && savedBlock > 1U) ||
+        !isKnownBlock(block)) {
       error = "the world save contains an invalid block value";
       return WorldLoadStatus::Error;
     }
@@ -299,7 +378,34 @@ WorldLoadStatus loadWorldSave(const std::filesystem::path &path,
       return WorldLoadStatus::Error;
     }
     previous = coordinate;
-    edits.push_back({coordinate, solid != 0U});
+    edits.emplace_back(coordinate, block);
+  }
+
+  InventoryState loadedInventory;
+  if (version == saveFormatVersion) {
+    const auto readStacks = [&](auto &stacks) {
+      for (ItemStack &stack : stacks) {
+        if (!readStack(input, stack, &hash)) {
+          return false;
+        }
+      }
+      return true;
+    };
+    if (!readStacks(loadedInventory.storage) ||
+        !readStacks(loadedInventory.quick) ||
+        !readStacks(loadedInventory.handCrafting) ||
+        !readStacks(loadedInventory.tableCrafting) ||
+        !readStack(input, loadedInventory.cursor, &hash)) {
+      error = "the world save contains invalid inventory data";
+      return WorldLoadStatus::Error;
+    }
+    std::uint64_t selectedQuick{};
+    if (!readUnsigned(input, selectedQuick, 4U, &hash) ||
+        selectedQuick >= quickSlotCount) {
+      error = "the world save contains an invalid selected item";
+      return WorldLoadStatus::Error;
+    }
+    loadedInventory.selectedQuick = static_cast<int>(selectedQuick);
   }
 
   std::uint64_t savedHash{};
@@ -308,6 +414,9 @@ WorldLoadStatus loadWorldSave(const std::filesystem::path &path,
     return WorldLoadStatus::Error;
   }
   world.replaceEdits(edits);
+  if (inventory != nullptr) {
+    *inventory = std::move(loadedInventory);
+  }
   return WorldLoadStatus::Loaded;
 }
 

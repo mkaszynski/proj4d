@@ -12,6 +12,10 @@ BlockCoord blockCoord4D(const BlockCoord3D &coordinate) {
 
 BlockWorld3D::BlockWorld3D(BlockWorld &world) : world_(world) {}
 
+BlockId BlockWorld3D::blockAt(const BlockCoord3D &coordinate) const {
+  return world_.blockAt(blockCoord4D(coordinate));
+}
+
 bool BlockWorld3D::isSolid(const BlockCoord3D &coordinate) const {
   return world_.isSolid(blockCoord4D(coordinate));
 }
@@ -22,6 +26,10 @@ bool BlockWorld3D::generatedSolidAt(const BlockCoord3D &coordinate) const {
 
 bool BlockWorld3D::setSolid(const BlockCoord3D &coordinate, bool solid) {
   return world_.setSolid(blockCoord4D(coordinate), solid);
+}
+
+bool BlockWorld3D::setBlock(const BlockCoord3D &coordinate, BlockId block) {
+  return world_.setBlock(blockCoord4D(coordinate), block);
 }
 
 int BlockWorld3D::surfaceHeightAt(int x, int z) const {

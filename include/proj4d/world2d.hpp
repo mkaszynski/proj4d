@@ -30,8 +30,10 @@ class BlockWorld2D {
 public:
   explicit BlockWorld2D(BlockWorld &world);
 
+  [[nodiscard]] BlockId blockAt(const BlockCoord2D &coordinate) const;
   [[nodiscard]] bool isSolid(const BlockCoord2D &coordinate) const;
   [[nodiscard]] bool generatedSolidAt(const BlockCoord2D &coordinate) const;
+  [[nodiscard]] bool setBlock(const BlockCoord2D &coordinate, BlockId block);
   [[nodiscard]] bool setSolid(const BlockCoord2D &coordinate, bool solid);
   [[nodiscard]] int surfaceHeightAt(int x) const;
   [[nodiscard]] std::uint32_t seed() const;

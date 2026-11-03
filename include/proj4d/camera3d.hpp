@@ -17,7 +17,7 @@ public:
   Vec3 position{0.5, 2.65, 0.5};
   double focalLength{1.2};
   double nearPlane{0.08};
-  double farPlane{24.0};
+  double farPlane{96.0};
 
   void turnHorizontal(double radians);
   void turnVertical(double radians);
