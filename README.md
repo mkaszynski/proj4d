@@ -99,10 +99,11 @@ selection wireframe uses the same visibility path.
 
 ## Build and run
 
-Proj4D requires CMake 3.24 or newer, a C++20 compiler, SDL2, Git, and network
-access on the first configure. CMake fetches the pinned public Hypercraft commit
-`d830abc` and compiles only its authoritative native terrain/content sources;
-browser, multiplayer, lighting, and mob targets are not included.
+Proj4D requires CMake 3.24 or newer, a C++20 compiler, and SDL2. The repository
+includes a narrowly scoped snapshot of Hypercraft commit `d830abc` and compiles
+only its authoritative native terrain/content sources; browser, multiplayer,
+lighting, and mob code is not included. Builds are therefore reproducible
+without access to another repository or to the network.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

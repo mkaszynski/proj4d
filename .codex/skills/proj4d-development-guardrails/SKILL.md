@@ -31,6 +31,10 @@ Apply these invariants to every change in the Proj4D repository.
   the compatibility enum value `TerrainMode::Density`. Retain
   `--normal-smoke-test` only as a compatibility command name. Pin the upstream
   commit so saved procedural worlds and parity tests remain reproducible.
+- Keep the minimal pinned Hypercraft terrain/content snapshot in-tree so the
+  public repository builds reproducibly without credentials or network access.
+  Never replace it with a configure-time fetch from a private repository, and
+  never import unrelated Hypercraft client, server, asset, or user data.
 - Implement each 2D terrain as a thin view of the authoritative 4D
   `BlockWorld`: `(x,y)` must read and edit `(x,y,0,0)` through the same 4D
   chunks and cache. Never copy or regenerate that plane into separate storage.

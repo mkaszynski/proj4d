@@ -3,40 +3,24 @@ cmake_minimum_required(VERSION 3.24)
 project(proj4d VERSION 0.1.0 LANGUAGES CXX)
 
 include(CTest)
-include(FetchContent)
-if(POLICY CMP0169)
-    # We intentionally populate only selected native sources; making the full
-    # Hypercraft project available would configure unrelated platform targets.
-    cmake_policy(SET CMP0169 OLD)
-endif()
 
-# Proj4D deliberately reuses Hypercraft's authoritative native C++ terrain
-# implementation instead of maintaining a look-alike generator.  Pinning the
-# source keeps Low/High worlds reproducible while avoiding all browser,
-# multiplayer, renderer, lighting, and mob targets from Hypercraft.
-FetchContent_Declare(
-    hypercraft_terrain_source
-    GIT_REPOSITORY https://github.com/mkaszynski/hypercraft.git
-    GIT_TAG d830abc
-    GIT_SHALLOW TRUE
-)
-FetchContent_GetProperties(hypercraft_terrain_source)
-if(NOT hypercraft_terrain_source_POPULATED)
-    FetchContent_Populate(hypercraft_terrain_source)
-endif()
-
+# This repository carries a narrowly scoped snapshot of Hypercraft's
+# authoritative native terrain/content implementation. Keeping the pinned
+# snapshot in-tree makes public and offline builds reproducible without pulling
+# any private browser, multiplayer, renderer, lighting, or mob code.
+set(PROJ4D_HYPERCRAFT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hypercraft)
 add_library(proj4d_hypercraft_terrain STATIC
-    ${hypercraft_terrain_source_SOURCE_DIR}/src/world/biome_registry.cpp
-    ${hypercraft_terrain_source_SOURCE_DIR}/src/world/chunk.cpp
-    ${hypercraft_terrain_source_SOURCE_DIR}/src/world/content_registry.cpp
-    ${hypercraft_terrain_source_SOURCE_DIR}/src/world/coordinates.cpp
-    ${hypercraft_terrain_source_SOURCE_DIR}/src/world/ore_registry.cpp
-    ${hypercraft_terrain_source_SOURCE_DIR}/src/world/terrain_generator.cpp
-    ${hypercraft_terrain_source_SOURCE_DIR}/src/world/tree_registry.cpp
-    ${hypercraft_terrain_source_SOURCE_DIR}/src/world/world_seed.cpp
+    ${PROJ4D_HYPERCRAFT_DIR}/src/world/biome_registry.cpp
+    ${PROJ4D_HYPERCRAFT_DIR}/src/world/chunk.cpp
+    ${PROJ4D_HYPERCRAFT_DIR}/src/world/content_registry.cpp
+    ${PROJ4D_HYPERCRAFT_DIR}/src/world/coordinates.cpp
+    ${PROJ4D_HYPERCRAFT_DIR}/src/world/ore_registry.cpp
+    ${PROJ4D_HYPERCRAFT_DIR}/src/world/terrain_generator.cpp
+    ${PROJ4D_HYPERCRAFT_DIR}/src/world/tree_registry.cpp
+    ${PROJ4D_HYPERCRAFT_DIR}/src/world/world_seed.cpp
 )
 target_include_directories(proj4d_hypercraft_terrain PUBLIC
-    ${hypercraft_terrain_source_SOURCE_DIR}/include
+    ${PROJ4D_HYPERCRAFT_DIR}/include
 )
 target_compile_features(proj4d_hypercraft_terrain PUBLIC cxx_std_20)
 if(MSVC)
