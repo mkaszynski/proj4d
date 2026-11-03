@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -36,8 +37,14 @@ public:
                       std::size_t maximumLoadedChunks = 96U);
   explicit BlockWorld(TerrainMode terrainMode, std::uint32_t seed = 0x4D2026U,
                       std::size_t maximumLoadedChunks = 96U);
+  ~BlockWorld();
+
+  BlockWorld(const BlockWorld &) = delete;
+  BlockWorld &operator=(const BlockWorld &) = delete;
 
   [[nodiscard]] BlockId blockAt(const BlockCoord &coordinate) const;
+  [[nodiscard]] std::optional<BlockId>
+  loadedBlockAt(const BlockCoord &coordinate) const;
   [[nodiscard]] BlockId generatedBlockAt(const BlockCoord &coordinate) const;
   [[nodiscard]] bool isSolid(const BlockCoord &coordinate) const;
   [[nodiscard]] bool generatedSolidAt(const BlockCoord &coordinate) const;
@@ -50,7 +57,8 @@ public:
   [[nodiscard]] std::size_t maximumLoadedChunks() const;
   [[nodiscard]] std::uint64_t revision() const;
   [[nodiscard]] std::vector<BlockEdit> edits() const;
-  void prefetchRegion(const BlockCoord &center, int radius) const;
+  [[nodiscard]] bool prepareChunks(std::span<const ChunkCoord> chunks) const;
+  [[nodiscard]] bool prepareRegion(const BlockCoord &center, int radius) const;
   void replaceEdits(std::span<const BlockEdit> edits);
 
 private:
@@ -58,14 +66,17 @@ private:
     Chunk chunk;
     std::uint64_t lastAccess{};
   };
+  class ChunkStreamer;
 
   [[nodiscard]] Chunk &ensureChunk(const ChunkCoord &coordinate) const;
+  void collectGeneratedChunks() const;
   void evictLeastRecentlyUsed(const ChunkCoord &protectedChunk) const;
 
   TerrainGenerator generator_;
   std::size_t maximumLoadedChunks_{};
   mutable std::uint64_t accessClock_{};
   mutable std::unordered_map<ChunkCoord, CachedChunk, ChunkCoordHash> chunks_;
+  mutable std::unique_ptr<ChunkStreamer> streamer_;
   std::unordered_map<BlockCoord, BlockId, BlockCoordHash> overrides_;
   std::uint64_t revision_{};
 };

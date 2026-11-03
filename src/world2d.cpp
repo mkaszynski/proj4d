@@ -16,6 +16,11 @@ BlockId BlockWorld2D::blockAt(const BlockCoord2D &coordinate) const {
   return world_.blockAt(blockCoord4D(coordinate));
 }
 
+std::optional<BlockId>
+BlockWorld2D::loadedBlockAt(const BlockCoord2D &coordinate) const {
+  return world_.loadedBlockAt(blockCoord4D(coordinate));
+}
+
 bool BlockWorld2D::isSolid(const BlockCoord2D &coordinate) const {
   return world_.isSolid(blockCoord4D(coordinate));
 }
@@ -49,6 +54,10 @@ std::size_t BlockWorld2D::maximumLoadedChunks() const {
 }
 
 std::uint64_t BlockWorld2D::revision() const { return world_.revision(); }
+
+bool BlockWorld2D::prepareChunks(std::span<const ChunkCoord> chunks) const {
+  return world_.prepareChunks(chunks);
+}
 
 BlockCoord2D containingBlock(const Vec2 &point) {
   return {static_cast<int>(std::floor(point.x)),

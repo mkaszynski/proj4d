@@ -74,9 +74,10 @@ Apply these invariants to every change in the Proj4D repository.
   preserving material hue. Keep the upward boundary brightest, downward
   boundary darkest, and all eight directions visibly distinct; do not use
   frame-time randomness or add a dynamic lighting system.
-- Never treat a missing or not-yet-cached neighbor chunk as air. Generate it
-  from the selected terrain mode under the bounded loading policy before
-  deciding that a face is exposed.
+- Never treat a missing or not-yet-cached neighbor chunk as air. Publish new
+  visible geometry only after its required chunk set is ready. During cached
+  per-chunk extraction, conservatively treat data outside that set as opaque
+  and rebuild affected caches when the visible chunk set changes.
 - Keep the three independent look rotations: vertical, ordinary horizontal,
   and fourth-dimensional horizontal.
 - Map unmodified horizontal mouse motion to ordinary horizontal world look and
@@ -121,9 +122,10 @@ Apply these invariants to every change in the Proj4D repository.
 - Display the 1D view as a vertical strip spanning the screen height, centered
   horizontally, with width equal to one tenth of its height. Projected square
   sides must form readable rectangular intervals within this strip.
-- Trace each displayed 1D sample through the 2D block grid and show only its
-  nearest solid boundary. Never reveal rear blocks or underground cavities
-  through nearer terrain.
+- Mesh exposed 2D square boundaries per chunk, project them into 1D intervals,
+  and depth-rasterize those intervals. Never restore per-screen-sample world
+  ray tracing, and never reveal rear blocks or underground cavities through
+  nearer terrain.
 - Color each visible boundary interval by block material. Keep the center
   targeting mark visible. Give every block a stable coordinate-derived,
   visibly lighter or darker variation of its material color; never use
@@ -193,11 +195,22 @@ Apply these invariants to every change in the Proj4D repository.
 - Keep generation and rendering bounded per frame. Never scan the infinite
   world, generate an unbounded chunk set, or let the loaded-chunk cache grow
   without a fixed limit.
+- Stream requested chunks through one persistent bounded worker pool. A render
+  frame may enqueue work and collect completed chunks but must never wait on a
+  future, join a generation task, or synchronously generate an unseen neighbor.
+  Retain the last complete geometry while a newly requested set is loading.
 - Preserve explicit numeric guards for topology-region volume, loaded-chunk
   count, and measured smoke/startup time. Justify any increase with before/after
   evidence.
 - Cache topology extraction independently from camera projection so ordinary
   look rotation does not regenerate chunks or rescan blocks.
+- Cache exposed 3D faces and 2D edges per authoritative 4D chunk. Keep 4D
+  occupancy in a dense bounded grid, reuse its overlap when the camera crosses
+  a block, and cache wireframe visibility until source camera or topology
+  changes. External vision-cube orbit must not redo source-world occlusion.
+- Keep hot-path block solidity an exact constant-time lookup. Separate terrain
+  geometry distance from the farther cloud/camera distance so visual sky range
+  does not multiply terrain work.
 - Add tests for every behavior change, especially shared 4D chunk ownership,
   cross-dimensional save round trips, corrupt-save rejection, terrain-save
   isolation, 4D basis orthogonality, 3D and 2D camera behavior, menu routing,

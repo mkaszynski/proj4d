@@ -28,10 +28,13 @@ if(MSVC)
         $<$<CONFIG:Debug>:/O2>)
 else()
     # The authoritative generator performs dense 16^4 noise/decorator work.
-    # Keep that dependency optimized even in Proj4D's Debug test build so the
-    # correctness configuration does not turn chunk generation into minutes.
+    # This workload is measurably faster with -O2 than -O3 on the supported
+    # GCC toolchain. Keep the dependency at -O2 in normal optimized builds and
+    # in Debug tests so generation remains responsive and deterministic.
     target_compile_options(proj4d_hypercraft_terrain PRIVATE
-        $<$<CONFIG:Debug>:-O2>)
+        $<$<CONFIG:Debug>:-O2>
+        $<$<CONFIG:Release>:-O2>
+        $<$<CONFIG:RelWithDebInfo>:-O2>)
 endif()
 
 find_package(SDL2 2.0 CONFIG QUIET)
