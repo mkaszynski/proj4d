@@ -20,17 +20,21 @@ Apply these invariants to every change in the Proj4D repository.
 - Present a dimension menu with `4D`, `3D`, and `2D` before world creation,
   followed by a terrain menu with `Flat`, `Low`, and `High`. Support keyboard
   and mouse selection in both menus.
-- Generate `Flat` as a four-dimensional superflat field: every block at
-  `y <= 0` is solid, every block at `y > 0` is air, and the field is unbounded
+- Generate `Flat` as a perfectly level four-dimensional Hypercraft plains field
+  with grass, dirt, stone, deterministic ores, and no trees. Keep its
+  subsurface free of caves, its surface at `y=0`, and its extent unbounded
   across `x`, `z`, and `w` and infinitely deep.
-- Generate `Low` from Hypercraft Flat's exact seeded height-guide noise, 4D
-  density noise, and 1000x vertical falloff. Preserve its varying raw density
-  surface around the `y = 18` base level, but exclude caves, trees, ores,
-  fluids, biome layers, and other decorations. Keep it unbounded across `x`,
-  `z`, and `w` and infinitely deep.
-- Generate `High` with the original deterministic seeded four-dimensional
-  density and noise terrain through `TerrainMode::Density`. Retain
-  `--normal-smoke-test` only as a compatibility command name.
+- Generate `Low` from the complete pinned Hypercraft Flat generator. Preserve
+  its exact material-valued chunks, biome layers, caves, trees, ores, fluids,
+  and decorators rather than imitating its height guide.
+- Generate `High` from the complete pinned Hypercraft Normal generator through
+  the compatibility enum value `TerrainMode::Density`. Retain
+  `--normal-smoke-test` only as a compatibility command name. Pin the upstream
+  commit so saved procedural worlds and parity tests remain reproducible.
+- Keep the minimal pinned Hypercraft terrain/content snapshot in-tree so the
+  public repository builds reproducibly without credentials or network access.
+  Never replace it with a configure-time fetch from a private repository, and
+  never import unrelated Hypercraft client, server, asset, or user data.
 - Implement each 2D terrain as a thin view of the authoritative 4D
   `BlockWorld`: `(x,y)` must read and edit `(x,y,0,0)` through the same 4D
   chunks and cache. Never copy or regenerate that plane into separate storage.
@@ -42,6 +46,18 @@ Apply these invariants to every change in the Proj4D repository.
   replace the view with 3D slices, independent 3D worlds, or fake depth.
 - Keep the two-stage display boundary explicit: project the 4D world into the
   3D vision cube, then project that cube onto the user's 2D display.
+- Preserve the filled 4D projection as well as its crisp wireframe. Intersect
+  display rays analytically with bounded projected convex boundary volumes,
+  weight material colors by exact occupied path length inside the vision cube,
+  weight empty in-cube length as blue sky, keep rays outside the cube black, and
+  keep the result order independent. Never replace this with fixed-step
+  traversal through the infinite world.
+- Cache the filled projection until its camera, display-cube transform, visible
+  topology, world revision, or target size changes. Keep its internal image
+  resolution, projected-volume count, and per-volume pixel bounds explicit.
+- Clip 4D cubic boundary volumes against the camera near and far planes in
+  source space before projection. Never discard a whole nearby solid merely
+  because one of its vertices crosses a depth plane.
 - Cull every cubic face whose neighboring tesseract is solid, including across
   chunk boundaries. Preserve exposed faces even when geometry overlaps after
   projection.
@@ -49,13 +65,15 @@ Apply these invariants to every change in the Proj4D repository.
   entire edge visible or hidden from one midpoint ray; retain visible
   fragments, hide blocked fragments, and keep the per-edge work explicitly
   bounded. Apply the same depth-tested visibility to selection wireframes.
-- Keep the perfectly smooth `y=0` Flat surface legible with one bounded outer
-  wireframe guide around the local render region. Never add that guide to Low
-  or High; render their generated terrain feature edges. Do not restore
-  internal grid lines between smoothly joined surface cells.
-- Color each world edge by the 4D axis it actually follows: red `X`, green `Y`,
-  blue `Z`, and purple `W`. Do not choose a color from an incident face or
-  cycle colors decoratively.
+- Do not restore internal grid lines between smoothly joined surface cells.
+  Keep the visible feature-edge set bounded for Flat, Low, and High.
+- Color projected filled shapes and wireframes by block material. Keep grass,
+  dirt, stone, wood, leaves, ores, crafted blocks, and fluids distinguishable;
+  do not restore axis-colored world edges.
+- Shade projected 4D boundary volumes by their stable ±X/±Y/±Z/±W facing while
+  preserving material hue. Keep the upward boundary brightest, downward
+  boundary darkest, and all eight directions visibly distinct; do not use
+  frame-time randomness or add a dynamic lighting system.
 - Never treat a missing or not-yet-cached neighbor chunk as air. Generate it
   from the selected terrain mode under the bounded loading policy before
   deciding that a face is exposed.
@@ -82,13 +100,12 @@ Apply these invariants to every change in the Proj4D repository.
 ## Preserve Conventional 3D Vision and Play
 
 - Render 3D mode through an ordinary perspective camera into a 2D display on
-  a black background. Use bounded exposed-face meshing, near-plane clipping,
+  a blue-sky background. Use bounded exposed-face meshing, near-plane clipping,
   and batched triangle rendering; do not use per-screen-pixel world ray
   tracing or reveal occluded terrain.
-- Color cube faces by their perpendicular world axis: red `X`, green `Y`, and
-  blue `Z`. Give each cube a stable coordinate-derived lighter or darker shade
-  without changing those axis identities. Draw a white wireframe around the
-  selected cube.
+- Color cube faces by block material. Give each cube a stable
+  coordinate-derived lighter or darker shade without changing material
+  identity. Draw a white wireframe around the selected cube.
 - Use conventional mouse yaw and pitch, clamp pitch at straight up/down, use
   `W/S` forward/back, `A/D` strafe, `Space` jump, and held `Shift` sneak.
   Preserve the exact shared physics constants, axis-separated wall sliding,
@@ -99,17 +116,18 @@ Apply these invariants to every change in the Proj4D repository.
 - Render 2D mode through a native 2D perspective camera into a 1D first-person
   view. Never replace it with a side-on platformer, overhead camera, or 4D
   slice.
+- Keep empty sky blue in 4D, 3D, and 2D while preserving material colors,
+  cloud contrast, status bars, and selection marks.
 - Display the 1D view as a vertical strip spanning the screen height, centered
   horizontally, with width equal to one tenth of its height. Projected square
   sides must form readable rectangular intervals within this strip.
 - Trace each displayed 1D sample through the 2D block grid and show only its
   nearest solid boundary. Never reveal rear blocks or underground cavities
   through nearer terrain.
-- Color each visible boundary interval by the world direction along which it
-  runs, using the reversed 2D palette: green `X` and red `Y`. Keep the center
+- Color each visible boundary interval by block material. Keep the center
   targeting mark visible. Give every block a stable coordinate-derived,
-  visibly lighter or darker variation of its axis color; never use frame-time
-  randomness that makes block colors shimmer.
+  visibly lighter or darker variation of its material color; never use
+  frame-time randomness that makes block colors shimmer.
 - Map vertical mouse motion to vertical 2D look, ignore horizontal mouse
   motion, and clamp look at straight up and straight down. Use `Z` to reverse
   the horizontal view and forward direction.
@@ -126,9 +144,11 @@ Apply these invariants to every change in the Proj4D repository.
 - Keep exactly three persistent world identities: Flat, Low, and High. All
   dimension modes must automatically continue the selected terrain's same
   save; never add separate 3D or 2D saves or require save/load menu buttons.
-- Persist the authoritative seed, terrain identity, and all 4D edit overrides,
-  including edits outside either slice. Slice edits must reload in 4D; 4D
-  edits at `w=0` must reload in 3D, and edits at `z=0,w=0` in 2D.
+- Persist the authoritative seed, terrain identity, material-valued 4D edit
+  overrides, canonical inventory/crafting fields, cursor, selected slot, stack
+  counts, and tool durability. Include edits and inventory slots outside either
+  slice. Slice edits must reload in 4D; 4D edits at `w=0` must reload in 3D,
+  and edits at `z=0,w=0` in 2D.
 - Keep the save format versioned and bounded. Validate its signature, terrain,
   seed, size, coordinate ordering, block values, and checksum before mutating
   the in-memory world. Refuse damaged or mismatched saves without overwriting
@@ -139,13 +159,33 @@ Apply these invariants to every change in the Proj4D repository.
 - Keep graphical smoke modes isolated from real user saves so CI and
   screenshots remain deterministic.
 
+## Preserve Dimension-Native Survival Systems
+
+- Keep one canonical three-axis inventory volume per terrain save. Expose its
+  complete volume in 4D, centered plane in 3D, and centered line in 2D. Drops
+  collected in a lower-dimensional mode must enter slots visible in that mode;
+  hidden higher-dimensional slots remain intact and accessible in 4D.
+- Keep crafting dimension-native: a line in 2D, conventional plane in 3D, and
+  volume in 4D. Lower-dimensional patterns must match their displayed centered
+  slice, accept translated patterns where they fit, consume ingredients
+  transactionally, and never consume items in hidden slices.
+- Preserve Hypercraft content identity, stack sizes, mining multipliers, tool
+  speed, and durability for supported blocks and items. Prevent mining when the
+  visible inventory cannot accept the drop, and consume placed materials.
+- Keep inventory, crafting, tools, items/blocks, and clouds. Do not expand scope
+  into lighting, mobs, combat, multiplayer, browser/WASM, or other unspecified
+  Hypercraft systems without an explicit request.
+- Generate clouds as one deterministic infinite 4D visual field. 3D must show
+  its `w=0` slice and 2D its `z=0,w=0` slice. Keep cloud work bounded and clouds
+  non-colliding and independent of terrain storage.
+
 ## Keep Ownership Clear
 
 - Keep game and projection truth in portable C++.
 - Let the SDL layer own only platform input, windowing, and final drawing.
-- Route building and breaking through dimension-correct chunk-backed world
-  APIs and exact grid traversal. Preserve edits across chunk eviction and
-  regeneration.
+- Route mining and placement through `GameSession` and dimension-correct
+  chunk-backed world APIs and exact grid traversal. Preserve material edits
+  across chunk eviction and regeneration.
 - Avoid duplicated simulation or projection rules in presentation code.
 
 ## Protect Performance and Correctness
@@ -161,12 +201,15 @@ Apply these invariants to every change in the Proj4D repository.
 - Add tests for every behavior change, especially shared 4D chunk ownership,
   cross-dimensional save round trips, corrupt-save rejection, terrain-save
   isolation, 4D basis orthogonality, 3D and 2D camera behavior, menu routing,
-  Flat boundaries, Low golden parity with Hypercraft Flat, High density
-  determinism, exact 2D terrain cross-sections, deep terrain, occlusion, cache
-  limits, edit survival, all projections, shared physics, and interaction.
+  Flat plains/no-cave boundaries, exact full-chunk Low parity with Hypercraft
+  Flat, exact full-chunk High parity with Hypercraft Normal, material identity,
+  dimensional inventory/crafting slices, mining/tool timing, cloud slices,
+  occupied-path color averaging, exact 2D terrain cross-sections, deep terrain,
+  occlusion, cache limits, edit survival, all projections, shared physics, and
+  interaction.
 - Run the complete build, CTest suite, and headless graphical smoke tests for
   the dimension menu, all three terrain menus, and Flat, Low, and High in 4D,
-  3D, and 2D before handoff.
+  3D, and 2D, plus all three inventory interfaces, before handoff.
 - Treat broken native frame rate or unbounded geometry growth as regressions.
 
 ## Keep the Repository Public-Safe

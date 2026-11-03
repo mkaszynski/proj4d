@@ -6,23 +6,20 @@ Chunk::Chunk(ChunkCoord coordinate) : coordinate_(coordinate) {}
 
 const ChunkCoord &Chunk::coordinate() const { return coordinate_; }
 
+BlockId Chunk::blockAt(const LocalBlockCoord &local) const {
+  return blocks_.at(localBlockIndex(local));
+}
+
+void Chunk::setBlock(const LocalBlockCoord &local, BlockId block) {
+  blocks_.at(localBlockIndex(local)) = block;
+}
+
 bool Chunk::isSolid(const LocalBlockCoord &local) const {
-  const std::size_t index = localBlockIndex(local);
-  const std::size_t word = index / wordBits;
-  const std::size_t bit = index % wordBits;
-  return (blocks_[word] & (std::uint64_t{1} << bit)) != 0U;
+  return proj4d::isSolid(blockAt(local));
 }
 
 void Chunk::setSolid(const LocalBlockCoord &local, bool solid) {
-  const std::size_t index = localBlockIndex(local);
-  const std::size_t word = index / wordBits;
-  const std::size_t bit = index % wordBits;
-  const std::uint64_t mask = std::uint64_t{1} << bit;
-  if (solid) {
-    blocks_[word] |= mask;
-  } else {
-    blocks_[word] &= ~mask;
-  }
+  setBlock(local, solid ? BlockId::stone : BlockId::air);
 }
 
 } // namespace proj4d

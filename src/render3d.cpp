@@ -32,6 +32,11 @@ std::array<std::uint8_t, 3> visionBlockColor3D(int worldAxis,
   return result;
 }
 
+std::array<std::uint8_t, 3> visionBlockColor3D(BlockId material,
+                                               const BlockCoord3D &block) {
+  return shadedBlockColor(material, blockBrightnessPercent3D(block)).array();
+}
+
 std::vector<VisionSample3D> buildVisionImage3D(const BlockWorld3D &world,
                                                const Camera3D &camera,
                                                int width, int height,
@@ -88,7 +93,8 @@ std::vector<VisibleFace3D> buildVisibleFaces3D(const BlockWorld3D &world,
                   cornerOffsets[corner][1];
               corners[corner] = point;
             }
-            faces.push_back({block, axis, direction, corners});
+            faces.push_back(
+                {block, axis, direction, corners, world.blockAt(block)});
           }
         }
       }
@@ -203,7 +209,7 @@ void rasterizeTriangle(const std::array<RasterVertex, 3> &vertices,
         continue;
       }
       depthBuffer[index] = depth;
-      samples[index] = {true, face.worldAxis, depth, face.block};
+      samples[index] = {true, face.worldAxis, depth, face.block, face.material};
     }
   }
 }
@@ -240,6 +246,7 @@ projectVisibleFaces3D(const std::vector<VisibleFace3D> &faces,
     }
 
     ProjectedFace3D projected{face.block, face.worldAxis};
+    projected.material = face.material;
     bool allLeft = true;
     bool allRight = true;
     bool allAbove = true;

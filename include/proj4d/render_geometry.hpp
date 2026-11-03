@@ -13,18 +13,21 @@ struct Line3 {
   Vec3 from{};
   Vec3 to{};
   int worldAxis{};
+  BlockId material{BlockId::stone};
 };
 
 struct FeatureEdge4D {
   Vec4 from{};
   Vec4 to{};
   int worldAxis{};
+  BlockId material{BlockId::stone};
 };
 
 struct VisibleBoundaryCell4D {
   BlockCoord block{};
   int axis{};
   int side{};
+  BlockId material{BlockId::stone};
 };
 
 inline constexpr int renderBlockRadius = 6;
@@ -37,6 +40,8 @@ buildVisibleBoundaryCells(const BlockWorld &world, const BlockCoord &center,
 [[nodiscard]] std::vector<FeatureEdge4D>
 buildFeatureEdges(const BlockWorld &world, const BlockCoord &center,
                   int radius = renderBlockRadius);
+[[nodiscard]] std::vector<FeatureEdge4D>
+buildFeatureEdges(std::span<const VisibleBoundaryCell4D> cells);
 [[nodiscard]] std::optional<Line3> clipLineToVisionCube(Line3 line);
 [[nodiscard]] std::vector<Line3>
 projectFeatureEdges(std::span<const FeatureEdge4D> edges,

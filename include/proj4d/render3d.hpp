@@ -23,12 +23,15 @@ inline constexpr int visionMaximumBrightnessPercent3D = 118;
 [[nodiscard]] int blockBrightnessPercent3D(const BlockCoord3D &block);
 [[nodiscard]] std::array<std::uint8_t, 3>
 visionBlockColor3D(int worldAxis, const BlockCoord3D &block);
+[[nodiscard]] std::array<std::uint8_t, 3>
+visionBlockColor3D(BlockId material, const BlockCoord3D &block);
 
 struct VisionSample3D {
   bool solid{};
   int worldAxis{};
   double distance{};
   BlockCoord3D block{};
+  BlockId material{BlockId::air};
 };
 
 struct VisibleFace3D {
@@ -36,6 +39,7 @@ struct VisibleFace3D {
   int worldAxis{};
   int normalDirection{};
   std::array<Vec3, 4> corners{};
+  BlockId material{BlockId::air};
 };
 
 struct ProjectedFace3D {
@@ -44,6 +48,7 @@ struct ProjectedFace3D {
   double depth{};
   std::array<Vec2, 8> vertices{};
   std::size_t vertexCount{};
+  BlockId material{BlockId::air};
 };
 
 struct Line2D {

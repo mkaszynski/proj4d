@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <unordered_map>
 
+#include "hypercraft/world/terrain_generator.hpp"
 #include "proj4d/chunk.hpp"
 
 namespace proj4d {
@@ -23,6 +25,7 @@ public:
   [[nodiscard]] std::uint32_t seed() const;
   [[nodiscard]] TerrainMode mode() const;
   [[nodiscard]] double densityAt(const BlockCoord &coordinate) const;
+  [[nodiscard]] BlockId generatedBlockAt(const BlockCoord &coordinate) const;
   [[nodiscard]] bool generatedSolidAt(const BlockCoord &coordinate) const;
   [[nodiscard]] int surfaceHeightAt(int x, int z, int w) const;
   [[nodiscard]] Chunk generateChunk(const ChunkCoord &coordinate) const;
@@ -47,9 +50,21 @@ private:
                                                double heightGuide) const;
   [[nodiscard]] bool hypercraftFlatSolidAt(const BlockCoord &coordinate,
                                            double heightGuide) const;
+  [[nodiscard]] BlockId flatOreBlockAt(const BlockCoord &coordinate) const;
+  [[nodiscard]] const Chunk &
+  ensureDecoratedChunk(const ChunkCoord &coordinate) const;
 
   std::uint32_t seed_{};
   TerrainMode mode_{};
+  hypercraft::TerrainGenerator lowGenerator_;
+  hypercraft::TerrainGenerator highGenerator_;
+  struct CachedGeneratedChunk {
+    Chunk chunk;
+    std::uint64_t lastAccess{};
+  };
+  mutable std::uint64_t generatedChunkAccessClock_{};
+  mutable std::unordered_map<ChunkCoord, CachedGeneratedChunk, ChunkCoordHash>
+      generatedChunkCache_;
 };
 
 } // namespace proj4d

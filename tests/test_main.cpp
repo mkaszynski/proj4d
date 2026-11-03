@@ -10,10 +10,14 @@
 #include <string>
 #include <vector>
 
+#include "hypercraft/world/terrain_generator.hpp"
 #include "proj4d/camera.hpp"
 #include "proj4d/camera2d.hpp"
 #include "proj4d/camera3d.hpp"
 #include "proj4d/chunk.hpp"
+#include "proj4d/clouds.hpp"
+#include "proj4d/game_session.hpp"
+#include "proj4d/inventory.hpp"
 #include "proj4d/mouse_input.hpp"
 #include "proj4d/player_motion.hpp"
 #include "proj4d/player_motion2d.hpp"
@@ -23,6 +27,7 @@
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/terrain_generator.hpp"
 #include "proj4d/view_status.hpp"
+#include "proj4d/volume4d.hpp"
 #include "proj4d/world.hpp"
 #include "proj4d/world2d.hpp"
 #include "proj4d/world3d.hpp"
@@ -61,6 +66,19 @@ void expect(bool condition, const std::string &message) {
   if (!condition) {
     std::cerr << "FAIL: " << message << '\n';
     ++failures;
+  }
+}
+
+void clearFlatAbove(proj4d::BlockWorld &world, int minimumX, int maximumX,
+                    int minimumZ, int maximumZ, int minimumW, int maximumW) {
+  for (int w = minimumW; w <= maximumW; ++w) {
+    for (int z = minimumZ; z <= maximumZ; ++z) {
+      for (int y = 1; y <= 8; ++y) {
+        for (int x = minimumX; x <= maximumX; ++x) {
+          static_cast<void>(world.setBlock({x, y, z, w}, proj4d::BlockId::air));
+        }
+      }
+    }
   }
 }
 
@@ -316,6 +334,7 @@ void testPlayerPhysicsMatchesHypercraft() {
          "eye-to-head collision height matches Hypercraft");
 
   proj4d::BlockWorld flatWorld(proj4d::TerrainMode::Flat, 2026U);
+  clearFlatAbove(flatWorld, -1, 8, -1, 8, -1, 8);
   proj4d::Camera4D camera;
   camera.position = {0.5, 1.0 + proj4d::playerEyeHeight, 0.5, 0.5};
   const proj4d::Vec4 start = camera.position;
@@ -675,8 +694,16 @@ void testSharedWorldSaving() {
   expect(slice3D.setSolid(threeDimensionalEdit, true),
          "3D can add an edit to the shared w=0 world slice");
 
+  proj4d::InventoryState savedInventory;
+  savedInventory.quick[0] =
+      proj4d::normalizedStack({proj4d::BlockId::grass, 17});
+  savedInventory.storage[5] = proj4d::normalizedStack(
+      {proj4d::BlockId::iron_tool, 1,
+       proj4d::maximumDurability(proj4d::BlockId::iron_tool) - 3});
+  savedInventory.selectedQuick = 2;
+
   std::string error;
-  expect(proj4d::saveWorldSave(lowPath, original, error),
+  expect(proj4d::saveWorldSave(lowPath, original, error, &savedInventory),
          "a shared terrain world saves successfully: " + error);
   std::filesystem::path temporarySavePath = lowPath;
   temporarySavePath += ".tmp";
@@ -685,9 +712,15 @@ void testSharedWorldSaving() {
          "saving atomically installs the final file without a temporary file");
 
   proj4d::BlockWorld loaded(proj4d::TerrainMode::Low, seed, 4U);
-  expect(proj4d::loadWorldSave(lowPath, loaded, error) ==
+  proj4d::InventoryState loadedInventory;
+  expect(proj4d::loadWorldSave(lowPath, loaded, error, &loadedInventory) ==
              proj4d::WorldLoadStatus::Loaded,
          "selecting the same terrain loads its existing world: " + error);
+  expect(
+      loadedInventory.quick[0] == savedInventory.quick[0] &&
+          loadedInventory.storage[5] == savedInventory.storage[5] &&
+          loadedInventory.selectedQuick == savedInventory.selectedQuick,
+      "world saves restore inventory counts, tool durability, and selection");
   proj4d::BlockWorld2D loadedSlice(loaded);
   proj4d::BlockWorld3D loadedSlice3D(loaded);
   expect(loadedSlice.isSolid(sliceEdit),
@@ -856,6 +889,7 @@ void testThreeDimensionalProjectionAndVisibleFaces() {
 
 void testThreeDimensionalPhysicsAndInteraction() {
   proj4d::BlockWorld backing(proj4d::TerrainMode::Flat, 4301U);
+  clearFlatAbove(backing, -1, 8, -1, 8, 0, 0);
   proj4d::BlockWorld3D world(backing);
   proj4d::Camera3D camera;
   camera.position = {0.5, 1.0 + proj4d::playerEyeHeight, 0.5};
@@ -1102,21 +1136,6 @@ void testFlatTerrainAndPreservedDensityFunctions() {
   expect(first.mode() == proj4d::TerrainMode::Flat,
          "the active terrain generator defaults to flat mode");
 
-  const proj4d::TerrainGenerator legacyDensity(12345U,
-                                               proj4d::TerrainMode::Density);
-  expect(legacyDensity.mode() == proj4d::TerrainMode::Density,
-         "the original density terrain remains selectable");
-  for (const proj4d::BlockCoord &coordinate : samples) {
-    expect(legacyDensity.generatedSolidAt(coordinate) ==
-               (legacyDensity.densityAt(coordinate) > 0.0),
-           "legacy density mode retains the original solidity rule");
-  }
-  const int densitySurface = legacyDensity.surfaceHeightAt(0, 0, 0);
-  expect(legacyDensity.generatedSolidAt({0, densitySurface, 0, 0}),
-         "legacy density mode retains its surface search");
-  expect(!legacyDensity.generatedSolidAt({0, densitySurface + 1, 0, 0}),
-         "legacy density surface search still returns the highest solid block");
-
   constexpr std::array<proj4d::BlockCoord, 4> horizontalSamples{{
       {0, 0, 0, 0},
       {1000000, 0, -1000000, 500000},
@@ -1129,18 +1148,19 @@ void testFlatTerrainAndPreservedDensityFunctions() {
            "flat terrain has the same surface across x, z, and w");
     expect(first.generatedSolidAt(surface),
            "the flat ground surface is solid everywhere");
-    proj4d::BlockCoord above = surface;
-    ++above.y;
-    expect(!first.generatedSolidAt(above),
-           "the block immediately above flat ground is air everywhere");
     proj4d::BlockCoord below = surface;
     below.y = -1000000;
     expect(first.generatedSolidAt(below),
-           "flat terrain remains solid infinitely deep");
-    expect(first.generatedSolidAt(surface) ==
-               different.generatedSolidAt(surface),
-           "active flat terrain is independent of the retained density seed");
+           "flat terrain remains solid infinitely deep without caves");
   }
+
+  expect(first.generatedBlockAt({0, 0, 0, 0}) == proj4d::BlockId::grass &&
+             first.generatedBlockAt({0, -1, 0, 0}) == proj4d::BlockId::dirt,
+         "Flat uses plains grass and dirt on its perfectly level surface");
+  expect(first.generatedBlockAt({0, 1, 0, 0}) == proj4d::BlockId::air,
+         "Flat preserves an unobstructed spawn above its surface");
+  expect(first.generatedBlockAt({1000, 4, -2000, 3000}) == proj4d::BlockId::air,
+         "Flat's Hypercraft plains biome has no forest trees");
 
   const proj4d::Chunk surfaceChunk = first.generateChunk({7, 0, -9, 11});
   expect(surfaceChunk.isSolid({0, 0, 0, 0}),
@@ -1150,56 +1170,52 @@ void testFlatTerrainAndPreservedDensityFunctions() {
   const proj4d::Chunk deepChunk = first.generateChunk({-12, -5000, 34, -56});
   expect(deepChunk.isSolid({15, 15, 15, 15}),
          "arbitrarily deep chunks are completely solid");
+  bool deepIsSolid = true;
+  bool foundOre = false;
+  for (int w = 0; w < proj4d::chunkSize; ++w) {
+    for (int y = 0; y < proj4d::chunkSize; ++y) {
+      for (int z = 0; z < proj4d::chunkSize; ++z) {
+        for (int x = 0; x < proj4d::chunkSize; ++x) {
+          const proj4d::BlockId block = deepChunk.blockAt({x, y, z, w});
+          deepIsSolid = deepIsSolid && proj4d::isSolid(block);
+          foundOre = foundOre || proj4d::isOre(block);
+        }
+      }
+    }
+  }
+  expect(deepIsSolid && foundOre,
+         "Flat has deterministic ores but never carves a deep cave");
   const proj4d::Chunk skyChunk = first.generateChunk({99, 5000, -88, 77});
   expect(!skyChunk.isSolid({0, 0, 0, 0}),
          "arbitrarily high chunks are completely air");
 
   proj4d::BlockWorld flatWorld(12345U);
-  expect(proj4d::buildFeatureEdges(flatWorld, {0, 2, 0, 0}, 4).size() == 12U,
-         "smooth flat terrain retains only a bounded outer wireframe guide");
+  expect(proj4d::buildFeatureEdges(flatWorld, {0, 2, 0, 0}, 4).empty(),
+         "Flat plains removes artificial render-boundary guide edges");
 }
 
 void testLowTerrainMatchesHypercraftFlat() {
-  const proj4d::TerrainGenerator low(2468U, proj4d::TerrainMode::Low);
-  constexpr std::array<int, 9> wCoordinates{
-      -64, -48, -32, -16, 0, 16, 32, 48, 64,
-  };
-  constexpr std::array<int, 9> hypercraftSurfaceHeights{
-      16, 14, 16, 17, 18, 22, 22, 22, 19,
-  };
-
-  int minimumSurface = hypercraftSurfaceHeights.front();
-  int maximumSurface = hypercraftSurfaceHeights.front();
-  for (std::size_t index = 0; index < wCoordinates.size(); ++index) {
-    const int w = wCoordinates[index];
-    const int expectedSurface = hypercraftSurfaceHeights[index];
-    const int actualSurface = low.surfaceHeightAt(8, -8, w);
-    expect(actualSurface == expectedSurface,
-           "Low surface heights match Hypercraft Flat's seeded 4D terrain");
-    expect(low.generatedSolidAt({8, actualSurface, -8, w}),
-           "Hypercraft Flat's reported Low surface is solid");
-    expect(!low.generatedSolidAt({8, actualSurface + 1, -8, w}),
-           "Low has air immediately above Hypercraft Flat's raw surface");
-    for (int y = -128; y <= actualSurface; ++y) {
-      expect(low.generatedSolidAt({8, y, -8, w}),
-             "Low columns remain contiguous and cave-free below the surface");
+  constexpr std::uint32_t seed = 2468U;
+  const proj4d::TerrainGenerator low(seed, proj4d::TerrainMode::Low);
+  const hypercraft::TerrainGenerator reference(
+      seed, hypercraft::WorldGenerationType::flat);
+  const proj4d::Chunk actual = low.generateChunk({0, 1, -1, 1});
+  const hypercraft::Chunk expected = reference.generate_chunk({0, 1, -1, 1});
+  bool exact = true;
+  for (int w = 0; w < proj4d::chunkSize; ++w) {
+    for (int y = 0; y < proj4d::chunkSize; ++y) {
+      for (int z = 0; z < proj4d::chunkSize; ++z) {
+        for (int x = 0; x < proj4d::chunkSize; ++x) {
+          exact = exact && actual.blockAt({x, y, z, w}) ==
+                               expected.block_at({x, y, z, w});
+        }
+      }
     }
-    minimumSurface = std::min(minimumSurface, actualSurface);
-    maximumSurface = std::max(maximumSurface, actualSurface);
   }
-  expect(maximumSurface - minimumSurface >= 4,
-         "Low varies across w like Hypercraft Flat instead of forming a plane");
-  expect(low.surfaceHeightAt(0, 0, 0) == 18 &&
-             low.surfaceHeightAt(-31, 47, 19) == 20,
-         "Low retains additional Hypercraft Flat golden surface heights");
-  expect(low.generatedSolidAt({1000000, -1000000, -1000000, 500000}),
-         "Low remains solid infinitely deep at distant 4D coordinates");
-
-  const proj4d::Chunk lowSurfaceChunk = low.generateChunk({0, 1, -1, 1});
-  expect(lowSurfaceChunk.isSolid({8, 6, 8, 0}),
-         "Low chunks contain Hypercraft Flat's generated surface");
-  expect(!lowSurfaceChunk.isSolid({8, 7, 8, 0}),
-         "Low chunks contain air immediately above the generated surface");
+  expect(exact, "Low is byte-for-byte Hypercraft Flat, including caves, ores, "
+                "trees, and fluids");
+  expect(low.surfaceHeightAt(8, -8, 16) == reference.height_at(8, -8, 16),
+         "Low delegates its surface guide to Hypercraft Flat");
 
   proj4d::BlockWorld lowWorld(proj4d::TerrainMode::Low, 2468U);
   const auto lowEdges = proj4d::buildFeatureEdges(lowWorld, {8, 22, -8, 16}, 4);
@@ -1214,34 +1230,283 @@ void testBlockWorldUsesTheSelectedTerrainMode() {
   proj4d::BlockWorld flat(proj4d::TerrainMode::Flat, seed, 4U);
   proj4d::BlockWorld low(proj4d::TerrainMode::Low, seed, 4U);
   proj4d::BlockWorld high(proj4d::TerrainMode::Density, seed, 4U);
-  const proj4d::TerrainGenerator original(seed, proj4d::TerrainMode::Density);
+  const proj4d::TerrainGenerator highGenerator(seed,
+                                               proj4d::TerrainMode::Density);
+  const hypercraft::TerrainGenerator reference(
+      seed, hypercraft::WorldGenerationType::normal);
 
   expect(flat.terrainMode() == proj4d::TerrainMode::Flat,
          "Flat menu choice creates a flat BlockWorld");
   expect(low.terrainMode() == proj4d::TerrainMode::Low,
          "Low menu choice creates a Hypercraft Flat BlockWorld");
   expect(high.terrainMode() == proj4d::TerrainMode::Density,
-         "High menu choice creates a density BlockWorld");
+         "High menu choice creates a Hypercraft Normal BlockWorld");
   expect(!flat.generatedSolidAt({0, 18, 0, 0}) &&
              low.generatedSolidAt({0, 18, 0, 0}),
          "Flat and Low choices preserve their distinct terrain generators");
 
+  const proj4d::Chunk actual = highGenerator.generateChunk({0, 0, 0, 0});
+  const hypercraft::Chunk expected = reference.generate_chunk({0, 0, 0, 0});
+  bool exact = true;
   bool modesDiffer = false;
-  for (int w = -4; w <= 4 && !modesDiffer; w += 2) {
-    for (int z = -4; z <= 4 && !modesDiffer; z += 2) {
-      for (int y = -12; y <= 16 && !modesDiffer; ++y) {
-        const proj4d::BlockCoord sample{2, y, z, w};
-        expect(high.generatedSolidAt(sample) ==
-                   original.generatedSolidAt(sample),
-               "High world uses the retained original terrain function");
-        modesDiffer =
-            flat.generatedSolidAt(sample) != high.generatedSolidAt(sample);
+  for (int w = 0; w < proj4d::chunkSize; ++w) {
+    for (int y = 0; y < proj4d::chunkSize; ++y) {
+      for (int z = 0; z < proj4d::chunkSize; ++z) {
+        for (int x = 0; x < proj4d::chunkSize; ++x) {
+          exact = exact && actual.blockAt({x, y, z, w}) ==
+                               expected.block_at({x, y, z, w});
+          modesDiffer = modesDiffer || flat.blockAt({x, y, z, w}) !=
+                                           actual.blockAt({x, y, z, w});
+        }
       }
     }
   }
+  expect(exact,
+         "High is byte-for-byte Hypercraft Normal, including all decorators");
   expect(modesDiffer, "Flat and High menu choices create different terrain");
-  expect(high.surfaceHeightAt(0, 0, 0) == original.surfaceHeightAt(0, 0, 0),
-         "High world uses the original surface search");
+  expect(high.surfaceHeightAt(0, 0, 0) == reference.height_at(0, 0, 0),
+         "High delegates its surface guide to Hypercraft Normal");
+}
+
+void testDimensionNativeInventoryCraftingAndGameplay() {
+  expect(proj4d::visibleStorageSlots(proj4d::PlayDimension::Two).size() == 4U &&
+             proj4d::visibleStorageSlots(proj4d::PlayDimension::Three).size() ==
+                 16U &&
+             proj4d::visibleStorageSlots(proj4d::PlayDimension::Four).size() ==
+                 64U,
+         "2D, 3D, and 4D expose line, plane, and volume inventory slices");
+
+  for (const proj4d::PlayDimension dimension :
+       {proj4d::PlayDimension::Two, proj4d::PlayDimension::Three,
+        proj4d::PlayDimension::Four}) {
+    proj4d::InventoryState inventory;
+    const auto visible =
+        proj4d::visibleCraftingSlots(dimension, proj4d::CraftingStation::Hand);
+    inventory.handCrafting[visible.front()] =
+        proj4d::normalizedStack({proj4d::BlockId::wood, 1});
+    expect(proj4d::craftingOutput(inventory, dimension,
+                                  proj4d::CraftingStation::Hand) ==
+               proj4d::normalizedStack({proj4d::BlockId::planks, 4}),
+           "a log expands into planks in every dimension-native hand grid");
+    expect(proj4d::takeCraftingOutput(inventory, dimension,
+                                      proj4d::CraftingStation::Hand) &&
+               inventory.cursor.item == proj4d::BlockId::planks &&
+               inventory.cursor.count == 4,
+           "taking a crafting result consumes its dimensional ingredients");
+  }
+
+  proj4d::InventoryState lineTable;
+  const auto lineSlots = proj4d::visibleCraftingSlots(
+      proj4d::PlayDimension::Two, proj4d::CraftingStation::Table);
+  for (int index = 0; index < 3; ++index) {
+    lineTable.tableCrafting[lineSlots[static_cast<std::size_t>(index)]] =
+        proj4d::normalizedStack({proj4d::BlockId::planks, 1});
+  }
+  expect(proj4d::craftingOutput(lineTable, proj4d::PlayDimension::Two,
+                                proj4d::CraftingStation::Table)
+                 .item == proj4d::BlockId::crafting_table,
+         "2D collapses the crafting-table recipe to a straight line");
+
+  proj4d::InventoryState planeTable;
+  const auto planeSlots = proj4d::visibleCraftingSlots(
+      proj4d::PlayDimension::Three, proj4d::CraftingStation::Table);
+  for (const int index : {0, 1, 3, 4}) {
+    planeTable.tableCrafting[planeSlots[static_cast<std::size_t>(index)]] =
+        proj4d::normalizedStack({proj4d::BlockId::planks, 1});
+  }
+  expect(proj4d::craftingOutput(planeTable, proj4d::PlayDimension::Three,
+                                proj4d::CraftingStation::Table)
+                 .item == proj4d::BlockId::crafting_table,
+         "3D uses the standard 2-by-2 crafting-table recipe on a plane");
+
+  proj4d::InventoryState volumeTable;
+  for (int z = 0; z < 2; ++z) {
+    for (int y = 0; y < 2; ++y) {
+      for (int x = 0; x < 2; ++x) {
+        const std::size_t index = static_cast<std::size_t>(x + 3 * (y + 3 * z));
+        volumeTable.tableCrafting[index] =
+            proj4d::normalizedStack({proj4d::BlockId::planks, 1});
+      }
+    }
+  }
+  expect(proj4d::craftingOutput(volumeTable, proj4d::PlayDimension::Four,
+                                proj4d::CraftingStation::Table)
+                 .item == proj4d::BlockId::crafting_table,
+         "4D expands the crafting-table recipe into a 2-by-2-by-2 field");
+
+  proj4d::GameSession game(proj4d::TerrainMode::Flat, 9001U);
+  const proj4d::BlockCoord mined{0, 100, 0, 0};
+  expect(game.world().setBlock(mined, proj4d::BlockId::stone),
+         "gameplay test creates a mineable material block");
+  expect(!game.updateMining(mined, true, 1.99) &&
+             game.updateMining(mined, true, 0.01) &&
+             game.world().blockAt(mined) == proj4d::BlockId::air,
+         "survival mining uses Hypercraft's material/tool timing and drops the "
+         "block");
+  expect(game.inventory().quick[0].item == proj4d::BlockId::stone,
+         "mined materials enter the shared canonical inventory");
+  const proj4d::BlockCoord placed{1, 100, 0, 0};
+  const std::array<proj4d::BlockCoord, 0> unprotected{};
+  expect(game.placeSelected(placed, unprotected) &&
+             game.world().blockAt(placed) == proj4d::BlockId::stone,
+         "placing consumes the selected material and preserves its identity");
+
+  proj4d::GameSession sliceGame(proj4d::TerrainMode::Flat,
+                                proj4d::PlayDimension::Two, 9002U);
+  const proj4d::BlockCoord sliceMined{0, 100, 0, 0};
+  static_cast<void>(
+      sliceGame.world().setBlock(sliceMined, proj4d::BlockId::dirt));
+  expect(sliceGame.updateMining(sliceMined, true, 2.0),
+         "2D mining completes through the shared material game session");
+  const auto visibleQuick =
+      proj4d::visibleQuickSlots(proj4d::PlayDimension::Two);
+  expect(sliceGame.inventory().quick[visibleQuick.front()].item ==
+             proj4d::BlockId::dirt,
+         "lower-dimensional drops enter a slot visible in that slice");
+}
+
+void testAveragedFourDimensionalVolumeColor() {
+  std::array<int, 8> directionalShades{};
+  for (int axis = 0; axis < 4; ++axis) {
+    directionalShades[static_cast<std::size_t>(axis * 2)] =
+        proj4d::boundaryBrightnessPercent4D(axis, -1);
+    directionalShades[static_cast<std::size_t>(axis * 2 + 1)] =
+        proj4d::boundaryBrightnessPercent4D(axis, 1);
+  }
+  std::ranges::sort(directionalShades);
+  expect(std::ranges::unique(directionalShades).begin() ==
+                 directionalShades.end() &&
+             proj4d::boundaryBrightnessPercent4D(1, 1) >
+                 proj4d::boundaryBrightnessPercent4D(1, -1),
+         "the eight 4D face directions have stable distinct shading with a "
+         "brighter top");
+
+  proj4d::ProjectedBoundaryVolume4D first;
+  first.material = proj4d::BlockId::grass;
+  for (int mask = 0; mask < 8; ++mask) {
+    first.vertices[static_cast<std::size_t>(mask)] = {
+        (mask & 1) != 0 ? 1.0 : -1.0,
+        (mask & 2) != 0 ? 1.0 : -1.0,
+        (mask & 4) != 0 ? 1.0 : -1.0,
+    };
+  }
+  const proj4d::VolumeDisplayCamera camera{0.0, 0.0, 3.8};
+  const std::array singleVolume{first};
+  const auto grass =
+      proj4d::renderAveragedVolume4D(singleVolume, camera, 41, 41, 41);
+  const std::size_t center = static_cast<std::size_t>(
+      (grass.height / 2 * grass.width + grass.width / 2) * 4);
+  const proj4d::BlockColor grassColor =
+      proj4d::blockColor(proj4d::BlockId::grass);
+  expect(grass.rgba[center] == grassColor.red &&
+             grass.rgba[center + 1] == grassColor.green &&
+             grass.rgba[center + 2] == grassColor.blue,
+         "a single material filling the vision cube stays fully saturated");
+
+  proj4d::ProjectedBoundaryVolume4D partial = first;
+  partial.canonicalCube = false;
+  for (proj4d::Vec3 &vertex : partial.vertices) {
+    vertex = vertex * 0.5;
+  }
+  const std::array partialVolume{partial};
+  const auto skyMixed =
+      proj4d::renderAveragedVolume4D(partialVolume, camera, 41, 41, 41);
+  expect(skyMixed.rgba[center + 1] > proj4d::skyColor.green &&
+             skyMixed.rgba[center + 1] < grassColor.green &&
+             skyMixed.rgba[center + 2] > grassColor.blue &&
+             skyMixed.rgba[center + 2] < proj4d::skyColor.blue,
+         "empty path length inside the vision cube contributes blue sky");
+
+  proj4d::ProjectedBoundaryVolume4D second = first;
+  second.material = proj4d::BlockId::lava;
+  const std::array volumes{first, second};
+  const auto mixed =
+      proj4d::renderAveragedVolume4D(volumes, camera, 41, 41, 41);
+  const proj4d::BlockColor lavaColor =
+      proj4d::blockColor(proj4d::BlockId::lava);
+  expect(std::abs(static_cast<int>(mixed.rgba[center]) -
+                  (static_cast<int>(grassColor.red) + lavaColor.red) / 2) <=
+                 1 &&
+             std::abs(static_cast<int>(mixed.rgba[center + 1]) -
+                      (static_cast<int>(grassColor.green) + lavaColor.green) /
+                          2) <= 1,
+         "equal occupied path lengths produce their exact order-independent "
+         "average");
+  expect(mixed.width == 41 && mixed.height == 41,
+         "the analytical volume compositor honors its bounded internal "
+         "resolution");
+
+  proj4d::ProjectedBoundaryVolume4D degenerate;
+  degenerate.material = proj4d::BlockId::lava;
+  const std::array degenerateVolume{degenerate};
+  const auto empty =
+      proj4d::renderAveragedVolume4D(degenerateVolume, camera, 41, 41, 41);
+  expect(empty.rgba[center] == proj4d::skyColor.red &&
+             empty.rgba[center + 1] == proj4d::skyColor.green &&
+             empty.rgba[center + 2] == proj4d::skyColor.blue,
+         "degenerate projected cells are rejected instead of creating "
+         "strange full-cube edges");
+  const auto emptyZoomedOut = proj4d::renderAveragedVolume4D(
+      degenerateVolume, {0.0, 0.0, 6.5}, 41, 41, 41);
+  bool foundOutsideBlack = false;
+  for (std::size_t index = 0; index < emptyZoomedOut.rgba.size(); index += 4U) {
+    foundOutsideBlack =
+        foundOutsideBlack || (emptyZoomedOut.rgba[index] == 0U &&
+                              emptyZoomedOut.rgba[index + 1U] == 0U &&
+                              emptyZoomedOut.rgba[index + 2U] == 0U);
+  }
+  expect(foundOutsideBlack, "space beyond the 3D vision cube remains black");
+
+  proj4d::Camera4D closeCamera;
+  closeCamera.position = {-0.25, 100.5, 0.5, 0.5};
+  const std::array closeCell{proj4d::VisibleBoundaryCell4D{
+      {0, 100, 0, 0}, 0, -1, proj4d::BlockId::stone}};
+  const auto clipped = proj4d::projectBoundaryVolumes4D(closeCell, closeCamera);
+  expect(clipped.size() == 1U && !clipped.front().canonicalCube &&
+             clipped.front().vertexCount >= 4U,
+         "a close 4D solid face is clipped at the near plane instead of "
+         "disappearing");
+  const auto clippedImage =
+      proj4d::renderAveragedVolume4D(clipped, camera, 41, 41, 41);
+  bool foundClippedMaterial = false;
+  for (std::size_t index = 0; index < clippedImage.rgba.size(); index += 4U) {
+    const bool black = clippedImage.rgba[index] == 0U &&
+                       clippedImage.rgba[index + 1U] == 0U &&
+                       clippedImage.rgba[index + 2U] == 0U;
+    const bool sky = clippedImage.rgba[index] == proj4d::skyColor.red &&
+                     clippedImage.rgba[index + 1U] == proj4d::skyColor.green &&
+                     clippedImage.rgba[index + 2U] == proj4d::skyColor.blue;
+    foundClippedMaterial = foundClippedMaterial || (!black && !sky);
+  }
+  expect(foundClippedMaterial,
+         "the clipped close face remains compositable as a convex volume");
+}
+
+void testCloudsUseSharedDimensionalSlices() {
+  const auto clouds4D = proj4d::visibleClouds4D({0.5, 2.0, 0.5, 0.5});
+  const auto clouds3D = proj4d::visibleClouds3D({0.5, 2.0, 0.5});
+  const auto clouds2D = proj4d::visibleClouds2D({0.5, 2.0});
+  expect(!clouds4D.empty() && !clouds3D.empty() && !clouds2D.empty(),
+         "the deterministic infinite cloud field is visible in every mode");
+  bool all3DTrace4D = true;
+  for (const proj4d::Cloud3D &cloud : clouds3D) {
+    const int x = static_cast<int>(cloud.minimum.x / proj4d::cloudCellSize);
+    const int z = static_cast<int>(cloud.minimum.z / proj4d::cloudCellSize);
+    all3DTrace4D = all3DTrace4D && proj4d::cloudCellAt(x, z, 0);
+  }
+  bool all2DTrace4D = true;
+  for (const proj4d::Cloud2D &cloud : clouds2D) {
+    const int x = static_cast<int>(cloud.minimum.x / proj4d::cloudCellSize);
+    all2DTrace4D = all2DTrace4D && proj4d::cloudCellAt(x, 0, 0);
+  }
+  expect(all3DTrace4D && all2DTrace4D,
+         "3D and 2D clouds are exact w=0 and z=0,w=0 slices of 4D clouds");
+  proj4d::Camera4D camera;
+  camera.position = {0.5, 2.0, 0.5, 0.5};
+  camera.turnVertical(0.9);
+  expect(proj4d::projectCloudVolumes4D(clouds4D, camera).size() <=
+             clouds4D.size() * 8U,
+         "4D clouds project as bounded cubical boundary volumes");
 }
 
 void testInfiniteWorldCacheAndEdits() {
@@ -1419,7 +1684,8 @@ void testVisionGeometryIsBounded() {
   camera.turnVertical(-0.28);
   const proj4d::BlockCoord center = proj4d::containingBlock(camera.position);
   const auto lines = proj4d::buildVisionGeometry(world, camera, center, 4);
-  expect(!lines.empty(), "flat 4D terrain produces bounded wireframe geometry");
+  expect(lines.size() < 30000U,
+         "flat 4D terrain avoids artificial render-boundary wireframes");
   for (const auto &line : lines) {
     for (std::size_t axis = 0; axis < 3; ++axis) {
       expect(line.from[axis] >= -1.000001 && line.from[axis] <= 1.000001 &&
@@ -1458,6 +1724,9 @@ int main() {
     testFlatTerrainAndPreservedDensityFunctions();
     testLowTerrainMatchesHypercraftFlat();
     testBlockWorldUsesTheSelectedTerrainMode();
+    testDimensionNativeInventoryCraftingAndGameplay();
+    testAveragedFourDimensionalVolumeColor();
+    testCloudsUseSharedDimensionalSlices();
     testInfiniteWorldCacheAndEdits();
     testOccludedFacesAndSmoothEdgesAreCulled();
     testTerrainOccludesUndergroundCavities();

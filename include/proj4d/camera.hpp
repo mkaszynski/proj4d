@@ -22,7 +22,7 @@ public:
   Vec4 forward{0.0, 0.0, 1.0, 0.0};
   double focalLength{0.72};
   double nearPlane{0.08};
-  double farPlane{24.0};
+  double farPlane{96.0};
 
   void turnHorizontal(double radians);
   void turnVertical(double radians);

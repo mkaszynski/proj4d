@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -18,6 +19,8 @@
 #include "proj4d/camera.hpp"
 #include "proj4d/camera2d.hpp"
 #include "proj4d/camera3d.hpp"
+#include "proj4d/clouds.hpp"
+#include "proj4d/game_session.hpp"
 #include "proj4d/mouse_input.hpp"
 #include "proj4d/player_motion.hpp"
 #include "proj4d/player_motion2d.hpp"
@@ -26,6 +29,7 @@
 #include "proj4d/render3d.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/view_status.hpp"
+#include "proj4d/volume4d.hpp"
 #include "proj4d/world.hpp"
 #include "proj4d/world2d.hpp"
 #include "proj4d/world3d.hpp"
@@ -53,7 +57,47 @@ struct FeatureGeometryCache {
   std::uint64_t worldRevision{std::numeric_limits<std::uint64_t>::max()};
   bool initialized{};
   std::vector<FeatureEdge4D> edges;
+  std::vector<VisibleBoundaryCell4D> boundaryCells;
+  SDL_Texture *volumeTexture{};
+  int volumeWidth{};
+  int volumeHeight{};
+  Vec4 volumePosition{};
+  Vec4 volumeImageX{};
+  Vec4 volumeImageY{};
+  Vec4 volumeImageZ{};
+  Vec4 volumeForward{};
+  double volumeDisplayYaw{};
+  double volumeDisplayPitch{};
+  double volumeDisplayDistance{};
+  int volumeDisplayWidth{};
+  int volumeDisplayHeight{};
+  bool volumeInitialized{};
 };
+
+struct InventoryUiState {
+  bool open{};
+  CraftingStation station{CraftingStation::Hand};
+  double yaw{-0.55};
+  double pitch{0.42};
+};
+
+enum class InventoryUiArea {
+  Storage,
+  Quick,
+  Crafting,
+  Output,
+};
+
+struct InventoryUiSlot {
+  InventoryUiArea area{};
+  std::size_t index{};
+  SDL_Rect rectangle{};
+  double depth{};
+};
+
+void drawCenteredBitmapText(SDL_Renderer *renderer, const std::string &text,
+                            int centerX, int y, int scale,
+                            const std::array<std::uint8_t, 3> &color);
 
 enum class WorldDimension {
   Four,
@@ -117,13 +161,15 @@ const char *terrainModeName(TerrainMode mode) {
 
 struct PersistentWorldSession {
   std::filesystem::path path;
-  std::uint64_t savedRevision{};
+  std::uint64_t savedWorldRevision{};
+  std::uint64_t savedInventoryRevision{};
   bool failureReported{};
 };
 
-bool initializePersistentWorld(BlockWorld &world,
+bool initializePersistentWorld(GameSession &game,
                                PersistentWorldSession &session,
                                std::string &error) {
+  BlockWorld &world = game.world();
   char *preferencePath = SDL_GetPrefPath("Proj4D", "Proj4D");
   if (preferencePath == nullptr) {
     error =
@@ -134,34 +180,43 @@ bool initializePersistentWorld(BlockWorld &world,
                  worldSaveFilename(world.terrainMode());
   SDL_free(preferencePath);
 
-  const WorldLoadStatus loadStatus = loadWorldSave(session.path, world, error);
+  InventoryState loadedInventory;
+  const WorldLoadStatus loadStatus =
+      loadWorldSave(session.path, world, error, &loadedInventory);
   if (loadStatus == WorldLoadStatus::Error) {
     return false;
   }
+  if (loadStatus == WorldLoadStatus::Loaded) {
+    game.replaceInventory(std::move(loadedInventory));
+  }
   if (loadStatus == WorldLoadStatus::NotFound &&
-      !saveWorldSave(session.path, world, error)) {
+      !saveWorldSave(session.path, world, error, &game.inventory())) {
     return false;
   }
-  session.savedRevision = world.revision();
+  session.savedWorldRevision = world.revision();
+  session.savedInventoryRevision = game.inventoryRevision();
   std::cout << (loadStatus == WorldLoadStatus::Loaded ? "Loaded " : "Created ")
             << terrainModeName(world.terrainMode()) << " world save\n";
   return true;
 }
 
-bool persistChangedWorld(const BlockWorld &world,
+bool persistChangedWorld(const GameSession &game,
                          PersistentWorldSession &session) {
-  if (world.revision() == session.savedRevision) {
+  const BlockWorld &world = game.world();
+  if (world.revision() == session.savedWorldRevision &&
+      game.inventoryRevision() == session.savedInventoryRevision) {
     return true;
   }
   std::string error;
-  if (!saveWorldSave(session.path, world, error)) {
+  if (!saveWorldSave(session.path, world, error, &game.inventory())) {
     if (!session.failureReported) {
       std::cerr << "World save failed: " << error << '\n';
       session.failureReported = true;
     }
     return false;
   }
-  session.savedRevision = world.revision();
+  session.savedWorldRevision = world.revision();
+  session.savedInventoryRevision = game.inventoryRevision();
   session.failureReported = false;
   return true;
 }
@@ -226,6 +281,76 @@ void drawVisionCube(SDL_Renderer *renderer, const DisplayCamera &display,
       drawLine3(renderer, display, width, height, {from, to, -1}, {62, 74, 91});
     }
   }
+}
+
+void drawVisionCubeSky(SDL_Renderer *renderer, const DisplayCamera &display,
+                       int width, int height) {
+  std::vector<ScreenPoint> points;
+  points.reserve(8U);
+  for (int mask = 0; mask < 8; ++mask) {
+    const auto projected = projectForDisplay({(mask & 1) != 0 ? 1.0 : -1.0,
+                                              (mask & 2) != 0 ? 1.0 : -1.0,
+                                              (mask & 4) != 0 ? 1.0 : -1.0},
+                                             display, width, height);
+    if (projected) {
+      points.push_back(*projected);
+    }
+  }
+  std::ranges::sort(
+      points, [](const ScreenPoint &left, const ScreenPoint &right) {
+        return left.x < right.x || (left.x == right.x && left.y < right.y);
+      });
+  points.erase(
+      std::unique(points.begin(), points.end(),
+                  [](const ScreenPoint &left, const ScreenPoint &right) {
+                    return left.x == right.x && left.y == right.y;
+                  }),
+      points.end());
+  if (points.size() < 3U) {
+    return;
+  }
+  const auto cross2D = [](const ScreenPoint &origin, const ScreenPoint &first,
+                          const ScreenPoint &second) {
+    return static_cast<long long>(first.x - origin.x) * (second.y - origin.y) -
+           static_cast<long long>(first.y - origin.y) * (second.x - origin.x);
+  };
+  std::vector<ScreenPoint> hull;
+  hull.reserve(points.size() * 2U);
+  for (const ScreenPoint &point : points) {
+    while (hull.size() >= 2U &&
+           cross2D(hull[hull.size() - 2U], hull.back(), point) <= 0) {
+      hull.pop_back();
+    }
+    hull.push_back(point);
+  }
+  const std::size_t lowerSize = hull.size();
+  for (auto current = points.rbegin() + 1; current != points.rend();
+       ++current) {
+    while (hull.size() > lowerSize &&
+           cross2D(hull[hull.size() - 2U], hull.back(), *current) <= 0) {
+      hull.pop_back();
+    }
+    hull.push_back(*current);
+  }
+  hull.pop_back();
+  std::vector<SDL_Vertex> vertices;
+  vertices.reserve(hull.size());
+  for (const ScreenPoint &point : hull) {
+    SDL_Vertex vertex{};
+    vertex.position = {static_cast<float>(point.x),
+                       static_cast<float>(point.y)};
+    vertex.color = SDL_Color{skyColor.red, skyColor.green, skyColor.blue, 255};
+    vertices.push_back(vertex);
+  }
+  std::vector<int> indices;
+  for (std::size_t index = 1; index + 1 < hull.size(); ++index) {
+    indices.push_back(0);
+    indices.push_back(static_cast<int>(index));
+    indices.push_back(static_cast<int>(index + 1));
+  }
+  static_cast<void>(SDL_RenderGeometry(
+      renderer, nullptr, vertices.data(), static_cast<int>(vertices.size()),
+      indices.data(), static_cast<int>(indices.size())));
 }
 
 void drawCrosshair(SDL_Renderer *renderer, const DisplayCamera &display,
@@ -355,6 +480,315 @@ void drawBitmapText(SDL_Renderer *renderer, const std::string &text, int x,
       }
     }
     x += 6 * scale;
+  }
+}
+
+std::pair<ScreenPoint, double>
+projectInventoryPoint(int x, int y, int z, int side, double yaw, double pitch,
+                      int centerX, int centerY, double scale) {
+  const double middle = static_cast<double>(side - 1) * 0.5;
+  const Vec3 point{static_cast<double>(x) - middle,
+                   middle - static_cast<double>(y),
+                   static_cast<double>(z) - middle};
+  const double yawCosine = std::cos(yaw);
+  const double yawSine = std::sin(yaw);
+  const Vec3 yawed{point.x * yawCosine + point.z * yawSine, point.y,
+                   -point.x * yawSine + point.z * yawCosine};
+  const double pitchCosine = std::cos(pitch);
+  const double pitchSine = std::sin(pitch);
+  const Vec3 rotated{yawed.x, yawed.y * pitchCosine - yawed.z * pitchSine,
+                     yawed.y * pitchSine + yawed.z * pitchCosine};
+  return {{centerX + static_cast<int>(std::lround(rotated.x * scale)),
+           centerY - static_cast<int>(std::lround(rotated.y * scale))},
+          rotated.z};
+}
+
+void appendProjectedSlots(std::vector<InventoryUiSlot> &slots,
+                          InventoryUiArea area,
+                          std::span<const std::size_t> indices, int side,
+                          const InventoryUiState &ui, int centerX, int centerY,
+                          double scale, int size) {
+  for (const std::size_t index : indices) {
+    const int x = static_cast<int>(index % static_cast<std::size_t>(side));
+    const int y = static_cast<int>((index / static_cast<std::size_t>(side)) %
+                                   static_cast<std::size_t>(side));
+    const int z =
+        static_cast<int>(index / static_cast<std::size_t>(side * side));
+    const auto [point, depth] = projectInventoryPoint(
+        x, y, z, side, ui.yaw, ui.pitch, centerX, centerY, scale);
+    slots.push_back({area,
+                     index,
+                     {point.x - size / 2, point.y - size / 2, size, size},
+                     depth});
+  }
+}
+
+std::vector<InventoryUiSlot> inventoryUiSlots(PlayDimension dimension,
+                                              CraftingStation station,
+                                              const InventoryUiState &ui,
+                                              int width, int height) {
+  std::vector<InventoryUiSlot> slots;
+  const std::vector<std::size_t> storage = visibleStorageSlots(dimension);
+  const std::vector<std::size_t> quick = visibleQuickSlots(dimension);
+  const std::vector<std::size_t> crafting =
+      visibleCraftingSlots(dimension, station);
+  const int craftingSide =
+      station == CraftingStation::Hand ? handCraftSide : tableCraftSide;
+  if (dimension == PlayDimension::Four) {
+    const double storageScale = std::max(24.0, std::min(width, height) / 12.0);
+    appendProjectedSlots(slots, InventoryUiArea::Storage, storage, storageSide,
+                         ui, width * 35 / 100, height * 43 / 100, storageScale,
+                         22);
+    appendProjectedSlots(slots, InventoryUiArea::Quick, quick, quickSide, ui,
+                         width * 35 / 100, height * 78 / 100,
+                         storageScale * 0.72, 20);
+    appendProjectedSlots(slots, InventoryUiArea::Crafting, crafting,
+                         craftingSide, ui, width * 73 / 100, height * 45 / 100,
+                         storageScale * 0.88, 22);
+    slots.push_back({InventoryUiArea::Output,
+                     0U,
+                     {width * 83 / 100 - 15, height * 70 / 100 - 15, 30, 30},
+                     100.0});
+    return slots;
+  }
+
+  if (dimension == PlayDimension::Three) {
+    const int size = std::clamp(std::min(width, height) / 15, 30, 54);
+    const int storageLeft = width / 5;
+    const int storageTop = height / 4;
+    for (std::size_t visible = 0; visible < storage.size(); ++visible) {
+      slots.push_back({InventoryUiArea::Storage,
+                       storage[visible],
+                       {storageLeft + static_cast<int>(visible % 4U) * size,
+                        storageTop + static_cast<int>(visible / 4U) * size,
+                        size - 3, size - 3}});
+    }
+    const int quickTop = storageTop + size * 5;
+    for (std::size_t visible = 0; visible < quick.size(); ++visible) {
+      slots.push_back({InventoryUiArea::Quick,
+                       quick[visible],
+                       {storageLeft + static_cast<int>(visible % 3U) * size,
+                        quickTop + static_cast<int>(visible / 3U) * size,
+                        size - 3, size - 3}});
+    }
+    const int craftLeft = width * 3 / 5;
+    for (std::size_t visible = 0; visible < crafting.size(); ++visible) {
+      slots.push_back(
+          {InventoryUiArea::Crafting,
+           crafting[visible],
+           {craftLeft + static_cast<int>(visible % craftingSide) * size,
+            storageTop + static_cast<int>(visible / craftingSide) * size,
+            size - 3, size - 3}});
+    }
+    slots.push_back({InventoryUiArea::Output,
+                     0U,
+                     {craftLeft + craftingSide * size + size / 2,
+                      storageTop + craftingSide * size / 2 - size / 2, size - 3,
+                      size - 3}});
+    return slots;
+  }
+
+  const int slotWidth = std::clamp(width / 12, 42, 72);
+  const int slotHeight = std::max(10, slotWidth / 5);
+  const int storageLeft =
+      (width - static_cast<int>(storage.size()) * slotWidth) / 2;
+  for (std::size_t visible = 0; visible < storage.size(); ++visible) {
+    slots.push_back({InventoryUiArea::Storage,
+                     storage[visible],
+                     {storageLeft + static_cast<int>(visible) * slotWidth,
+                      height * 35 / 100, slotWidth - 4, slotHeight}});
+  }
+  const int quickLeft =
+      (width - static_cast<int>(quick.size()) * slotWidth) / 2;
+  for (std::size_t visible = 0; visible < quick.size(); ++visible) {
+    slots.push_back({InventoryUiArea::Quick,
+                     quick[visible],
+                     {quickLeft + static_cast<int>(visible) * slotWidth,
+                      height * 53 / 100, slotWidth - 4, slotHeight}});
+  }
+  const int craftLeft =
+      (width - (static_cast<int>(crafting.size()) + 2) * slotWidth) / 2;
+  for (std::size_t visible = 0; visible < crafting.size(); ++visible) {
+    slots.push_back({InventoryUiArea::Crafting,
+                     crafting[visible],
+                     {craftLeft + static_cast<int>(visible) * slotWidth,
+                      height * 70 / 100, slotWidth - 4, slotHeight}});
+  }
+  slots.push_back(
+      {InventoryUiArea::Output,
+       0U,
+       {craftLeft + (static_cast<int>(crafting.size()) + 1) * slotWidth,
+        height * 70 / 100, slotWidth - 4, slotHeight}});
+  return slots;
+}
+
+const ItemStack &stackForUiSlot(const InventoryState &inventory,
+                                const InventoryUiSlot &slot,
+                                CraftingStation station,
+                                const ItemStack &outputStack) {
+  switch (slot.area) {
+  case InventoryUiArea::Storage:
+    return inventory.storage.at(slot.index);
+  case InventoryUiArea::Quick:
+    return inventory.quick.at(slot.index);
+  case InventoryUiArea::Crafting:
+    return craftingSlots(inventory, station)[slot.index];
+  case InventoryUiArea::Output:
+    return outputStack;
+  }
+  return outputStack;
+}
+
+void drawInventorySlot(SDL_Renderer *renderer, const InventoryUiSlot &slot,
+                       const ItemStack &stack, PlayDimension dimension,
+                       bool selected) {
+  SDL_SetRenderDrawColor(renderer, selected ? 236 : 69, selected ? 245 : 83,
+                         selected ? 255 : 101, 235);
+  SDL_RenderDrawRect(renderer, &slot.rectangle);
+  if (stack.empty()) {
+    return;
+  }
+  const BlockColor color = blockColor(stack.item);
+  SDL_SetRenderDrawColor(renderer, color.red, color.green, color.blue, 245);
+  if (dimension == PlayDimension::Two) {
+    const int x = slot.rectangle.x + slot.rectangle.w / 2;
+    SDL_RenderDrawLine(renderer, x, slot.rectangle.y + 2, x,
+                       slot.rectangle.y + slot.rectangle.h - 2);
+  } else {
+    SDL_Rect itemRect{slot.rectangle.x + 4, slot.rectangle.y + 4,
+                      std::max(1, slot.rectangle.w - 8),
+                      std::max(1, slot.rectangle.h - 8)};
+    SDL_RenderFillRect(renderer, &itemRect);
+    if (dimension == PlayDimension::Four) {
+      SDL_SetRenderDrawColor(renderer, std::min(255, color.red + 35),
+                             std::min(255, color.green + 35),
+                             std::min(255, color.blue + 35), 255);
+      SDL_RenderDrawLine(renderer, itemRect.x, itemRect.y, itemRect.x + 4,
+                         itemRect.y - 4);
+      SDL_RenderDrawLine(renderer, itemRect.x + itemRect.w, itemRect.y,
+                         itemRect.x + itemRect.w + 4, itemRect.y - 4);
+      SDL_RenderDrawLine(renderer, itemRect.x + 4, itemRect.y - 4,
+                         itemRect.x + itemRect.w + 4, itemRect.y - 4);
+    }
+  }
+  if (stack.count > 1) {
+    drawBitmapText(renderer, std::to_string(stack.count), slot.rectangle.x + 2,
+                   slot.rectangle.y + 2, 1, {255, 255, 255});
+  }
+  if (isTool(stack.item)) {
+    const int maximum = std::max(1, maximumDurability(stack.item));
+    const int barWidth = std::max(1, slot.rectangle.w - 4);
+    const int remaining =
+        std::clamp(barWidth * stack.durability / maximum, 0, barWidth);
+    SDL_SetRenderDrawColor(renderer, 31, 38, 47, 255);
+    SDL_RenderDrawLine(renderer, slot.rectangle.x + 2,
+                       slot.rectangle.y + slot.rectangle.h - 3,
+                       slot.rectangle.x + 1 + barWidth,
+                       slot.rectangle.y + slot.rectangle.h - 3);
+    SDL_SetRenderDrawColor(renderer, 100, 225, 145, 255);
+    SDL_RenderDrawLine(renderer, slot.rectangle.x + 2,
+                       slot.rectangle.y + slot.rectangle.h - 3,
+                       slot.rectangle.x + 1 + remaining,
+                       slot.rectangle.y + slot.rectangle.h - 3);
+  }
+}
+
+void drawInventoryOverlay(SDL_Renderer *renderer,
+                          const InventoryState &inventory,
+                          PlayDimension dimension, const InventoryUiState &ui,
+                          int width, int height) {
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SDL_SetRenderDrawColor(renderer, 4, 7, 12, 218);
+  const SDL_Rect panel{width / 12, height / 10, width * 5 / 6, height * 4 / 5};
+  SDL_RenderFillRect(renderer, &panel);
+  drawCenteredBitmapText(renderer,
+                         dimension == PlayDimension::Four
+                             ? "4D INVENTORY CUBE"
+                             : (dimension == PlayDimension::Three
+                                    ? "3D INVENTORY"
+                                    : "2D INVENTORY LINE"),
+                         width / 2, panel.y + 18, 2, {226, 238, 250});
+  drawCenteredBitmapText(renderer,
+                         ui.station == CraftingStation::Hand ? "HAND CRAFTING"
+                                                             : "TABLE CRAFTING",
+                         width * 73 / 100, panel.y + 48, 1, {126, 215, 174});
+  std::vector<InventoryUiSlot> slots =
+      inventoryUiSlots(dimension, ui.station, ui, width, height);
+  std::ranges::sort(slots, std::less{}, &InventoryUiSlot::depth);
+  const ItemStack outputStack =
+      craftingOutput(inventory, dimension, ui.station);
+  for (const InventoryUiSlot &slot : slots) {
+    const bool selected =
+        slot.area == InventoryUiArea::Quick &&
+        static_cast<int>(slot.index) == inventory.selectedQuick;
+    drawInventorySlot(renderer, slot,
+                      stackForUiSlot(inventory, slot, ui.station, outputStack),
+                      dimension, selected);
+  }
+  int mouseX = 0;
+  int mouseY = 0;
+  SDL_GetMouseState(&mouseX, &mouseY);
+  if (!inventory.cursor.empty()) {
+    const InventoryUiSlot cursorSlot{
+        InventoryUiArea::Storage, 0U, {mouseX - 12, mouseY - 12, 24, 24}};
+    drawInventorySlot(renderer, cursorSlot, inventory.cursor, dimension, false);
+  }
+  drawCenteredBitmapText(renderer, "T CLOSE  RIGHT DRAG ROTATES 4D", width / 2,
+                         panel.y + panel.h - 28, 1, {139, 160, 181});
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+}
+
+bool applyInventoryUiClick(GameSession &game, PlayDimension dimension,
+                           const InventoryUiState &ui, int width, int height,
+                           int mouseX, int mouseY, int button) {
+  std::vector<InventoryUiSlot> slots =
+      inventoryUiSlots(dimension, ui.station, ui, width, height);
+  std::ranges::sort(slots, std::greater{}, &InventoryUiSlot::depth);
+  InventoryState changed = game.inventory();
+  const SDL_Point mousePoint{mouseX, mouseY};
+  for (const InventoryUiSlot &slot : slots) {
+    if (SDL_PointInRect(&mousePoint, &slot.rectangle) == SDL_FALSE) {
+      continue;
+    }
+    if (slot.area == InventoryUiArea::Output) {
+      if (!takeCraftingOutput(changed, dimension, ui.station)) {
+        return false;
+      }
+    } else {
+      ItemStack *target = nullptr;
+      if (slot.area == InventoryUiArea::Storage) {
+        target = &changed.storage.at(slot.index);
+      } else if (slot.area == InventoryUiArea::Quick) {
+        target = &changed.quick.at(slot.index);
+      } else {
+        target = &craftingSlots(changed, ui.station)[slot.index];
+      }
+      clickStack(*target, changed.cursor, button);
+    }
+    game.replaceInventory(std::move(changed));
+    return true;
+  }
+  return false;
+}
+
+void drawQuickStorage(SDL_Renderer *renderer, const InventoryState &inventory,
+                      PlayDimension dimension, int width, int height) {
+  const std::vector<std::size_t> visible = visibleQuickSlots(dimension);
+  const int size = dimension == PlayDimension::Four ? 18 : 30;
+  const int shown = static_cast<int>(visible.size());
+  const int columns = dimension == PlayDimension::Four ? 9 : shown;
+  const int rows = (shown + columns - 1) / columns;
+  const int left = (width - columns * size) / 2;
+  const int top = height - rows * size - 14;
+  for (int visibleIndex = 0; visibleIndex < shown; ++visibleIndex) {
+    const std::size_t index = visible[static_cast<std::size_t>(visibleIndex)];
+    const InventoryUiSlot slot{InventoryUiArea::Quick,
+                               index,
+                               {left + (visibleIndex % columns) * size,
+                                top + (visibleIndex / columns) * size, size - 2,
+                                size - 2}};
+    drawInventorySlot(renderer, slot, inventory.quick[index], dimension,
+                      static_cast<int>(index) == inventory.selectedQuick);
   }
 }
 
@@ -667,26 +1101,108 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
             int height, FeatureGeometryCache &geometryCache) {
   SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
   SDL_RenderClear(renderer);
-  drawVisionCube(renderer, display, width, height);
+  const bool profile = std::getenv("PROJ4D_PROFILE_4D") != nullptr;
+  const std::uint64_t frameStart = SDL_GetPerformanceCounter();
+  std::uint64_t topologyDone = frameStart;
   const BlockCoord center = containingBlock(camera.position);
   if (!geometryCache.initialized || geometryCache.center != center ||
       geometryCache.worldRevision != world.revision()) {
+    world.prefetchRegion(center, renderBlockRadius);
     geometryCache.center = center;
     geometryCache.worldRevision = world.revision();
-    geometryCache.edges = buildFeatureEdges(world, center);
+    geometryCache.boundaryCells = buildVisibleBoundaryCells(world, center);
+    geometryCache.edges = buildFeatureEdges(geometryCache.boundaryCells);
     geometryCache.initialized = true;
+    geometryCache.volumeInitialized = false;
+    topologyDone = SDL_GetPerformanceCounter();
   }
+  const auto sameVector = [](const Vec4 &left, const Vec4 &right) {
+    return left.x == right.x && left.y == right.y && left.z == right.z &&
+           left.w == right.w;
+  };
+  const bool volumeChanged =
+      !geometryCache.volumeInitialized ||
+      !sameVector(geometryCache.volumePosition, camera.position) ||
+      !sameVector(geometryCache.volumeImageX, camera.imageX) ||
+      !sameVector(geometryCache.volumeImageY, camera.imageY) ||
+      !sameVector(geometryCache.volumeImageZ, camera.imageZ) ||
+      !sameVector(geometryCache.volumeForward, camera.forward) ||
+      geometryCache.volumeDisplayYaw != display.yaw ||
+      geometryCache.volumeDisplayPitch != display.pitch ||
+      geometryCache.volumeDisplayDistance != display.distance ||
+      geometryCache.volumeDisplayWidth != width ||
+      geometryCache.volumeDisplayHeight != height;
+  if (volumeChanged) {
+    const std::uint64_t volumeStart = SDL_GetPerformanceCounter();
+    std::vector<ProjectedBoundaryVolume4D> volumes =
+        projectBoundaryVolumes4D(geometryCache.boundaryCells, camera);
+    std::vector<ProjectedBoundaryVolume4D> cloudVolumes =
+        projectCloudVolumes4D(visibleClouds4D(camera.position), camera);
+    const std::size_t available =
+        maximumProjectedBoundaryVolumes > volumes.size()
+            ? maximumProjectedBoundaryVolumes - volumes.size()
+            : 0U;
+    if (cloudVolumes.size() > available) {
+      cloudVolumes.resize(available);
+    }
+    volumes.insert(volumes.end(), cloudVolumes.begin(), cloudVolumes.end());
+    const AveragedVolumeImage volumeImage = renderAveragedVolume4D(
+        volumes, {display.yaw, display.pitch, display.distance}, width, height);
+    if (geometryCache.volumeTexture == nullptr ||
+        geometryCache.volumeWidth != volumeImage.width ||
+        geometryCache.volumeHeight != volumeImage.height) {
+      SDL_DestroyTexture(geometryCache.volumeTexture);
+      geometryCache.volumeTexture = SDL_CreateTexture(
+          renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
+          volumeImage.width, volumeImage.height);
+      if (geometryCache.volumeTexture != nullptr) {
+        SDL_SetTextureBlendMode(geometryCache.volumeTexture,
+                                SDL_BLENDMODE_BLEND);
+      }
+      geometryCache.volumeWidth = volumeImage.width;
+      geometryCache.volumeHeight = volumeImage.height;
+    }
+    if (geometryCache.volumeTexture != nullptr) {
+      SDL_UpdateTexture(geometryCache.volumeTexture, nullptr,
+                        volumeImage.rgba.data(), volumeImage.width * 4);
+    }
+    geometryCache.volumePosition = camera.position;
+    geometryCache.volumeImageX = camera.imageX;
+    geometryCache.volumeImageY = camera.imageY;
+    geometryCache.volumeImageZ = camera.imageZ;
+    geometryCache.volumeForward = camera.forward;
+    geometryCache.volumeDisplayYaw = display.yaw;
+    geometryCache.volumeDisplayPitch = display.pitch;
+    geometryCache.volumeDisplayDistance = display.distance;
+    geometryCache.volumeDisplayWidth = width;
+    geometryCache.volumeDisplayHeight = height;
+    geometryCache.volumeInitialized = true;
+    if (profile) {
+      const double frequency =
+          static_cast<double>(SDL_GetPerformanceFrequency());
+      const double topologyMilliseconds =
+          static_cast<double>(topologyDone - frameStart) * 1000.0 / frequency;
+      const double volumeMilliseconds =
+          static_cast<double>(SDL_GetPerformanceCounter() - volumeStart) *
+          1000.0 / frequency;
+      std::cerr << "4D profile: topology=" << topologyMilliseconds
+                << " ms, volume=" << volumeMilliseconds
+                << " ms, cells=" << geometryCache.boundaryCells.size()
+                << ", volumes=" << volumes.size() << '\n';
+    }
+  }
+  drawVisionCubeSky(renderer, display, width, height);
+  if (geometryCache.volumeTexture != nullptr) {
+    const SDL_Rect destination{0, 0, width, height};
+    SDL_RenderCopy(renderer, geometryCache.volumeTexture, nullptr,
+                   &destination);
+  }
+  drawVisionCube(renderer, display, width, height);
   const std::vector<Line3> lines =
       projectVisibleFeatureEdges(world, geometryCache.edges, camera);
-  constexpr std::array<std::array<std::uint8_t, 3>, 4> colors{{
-      {245, 140, 140},
-      {150, 245, 165},
-      {135, 185, 255},
-      {225, 150, 255},
-  }};
   for (const Line3 &line : lines) {
     drawLine3(renderer, display, width, height, line,
-              colors[static_cast<std::size_t>(line.worldAxis)]);
+              blockColor(line.material).array());
   }
   if (const auto hit = raycast(world, camera.position, camera.forward, 8.0)) {
     for (const Line3 &line :
@@ -696,20 +1212,52 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
   }
   drawCrosshair(renderer, display, width, height);
   drawStatusBar(renderer, camera, width);
-  SDL_RenderPresent(renderer);
 }
 
 void render(SDL_Renderer *renderer, const BlockWorld2D &world,
             const Camera2D &camera, int width, int height) {
-  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+  SDL_SetRenderDrawColor(renderer, skyColor.red, skyColor.green, skyColor.blue,
+                         255);
   SDL_RenderClear(renderer);
+
+  const int stripWidth = std::max(1, height / visionLineWidthDivisor);
+  const int stripLeft = (width - stripWidth) / 2;
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SDL_SetRenderDrawColor(renderer, 235, 242, 250, 72);
+  for (const Cloud2D &cloud : visibleClouds2D(camera.position)) {
+    double minimum = 1.0;
+    double maximum = -1.0;
+    bool complete = true;
+    for (int mask = 0; mask < 4; ++mask) {
+      const Vec2 point{cloud.minimum.x + ((mask & 1) != 0 ? cloud.size : 0.0),
+                       cloud.minimum.y + ((mask & 2) != 0 ? cloud.size : 0.0)};
+      const auto projected = camera.project(point);
+      if (!projected) {
+        complete = false;
+        break;
+      }
+      minimum = std::min(minimum, projected->position);
+      maximum = std::max(maximum, projected->position);
+    }
+    if (!complete || maximum < -1.0 || minimum > 1.0) {
+      continue;
+    }
+    minimum = std::clamp(minimum, -1.0, 1.0);
+    maximum = std::clamp(maximum, -1.0, 1.0);
+    const int top =
+        static_cast<int>(std::floor((1.0 - maximum) * 0.5 * height));
+    const int bottom =
+        static_cast<int>(std::ceil((1.0 - minimum) * 0.5 * height));
+    const SDL_Rect cloudStrip{stripLeft, top, stripWidth,
+                              std::max(1, bottom - top)};
+    SDL_RenderFillRect(renderer, &cloudStrip);
+  }
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
   const auto target = raycast(world, camera.position, camera.forward(), 8.0);
   const std::vector<VisionSample2D> samples =
       buildVisionLine(world, camera, height, camera.farPlane,
                       target ? std::optional(target->block) : std::nullopt);
-  const int stripWidth = std::max(1, height / visionLineWidthDivisor);
-  const int stripLeft = (width - stripWidth) / 2;
   int runStart = 0;
   while (runStart < height) {
     const VisionSample2D &sample =
@@ -727,7 +1275,7 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
     if (sample.solid) {
       const std::array<std::uint8_t, 3> color =
           sample.targeted ? std::array<std::uint8_t, 3>{255, 255, 255}
-                          : visionBlockColor2D(sample.worldAxis, sample.block);
+                          : visionBlockColor2D(sample.material, sample.block);
       SDL_SetRenderDrawColor(renderer, color[0], color[1], color[2], 255);
       const SDL_Rect rectangle{stripLeft, runStart, stripWidth,
                                runEnd - runStart};
@@ -740,7 +1288,6 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
   SDL_RenderDrawLine(renderer, stripLeft, height / 2,
                      stripLeft + stripWidth - 1, height / 2);
   drawStatusBar(renderer, camera, width);
-  SDL_RenderPresent(renderer);
 }
 
 struct VisionGeometry3D {
@@ -755,6 +1302,78 @@ ScreenPoint visionScreenPoint(const Vec2 &point, int width, int height) {
           static_cast<int>(std::lround((1.0 - point.y) * 0.5 * height))};
 }
 
+std::vector<VisibleFace3D> cloudFaces3D(const Vec3 &position) {
+  std::vector<VisibleFace3D> faces;
+  for (const Cloud3D &cloud : visibleClouds3D(position)) {
+    for (int axis = 0; axis < 3; ++axis) {
+      std::array<int, 2> tangentAxes{};
+      int tangentIndex = 0;
+      for (int candidate = 0; candidate < 3; ++candidate) {
+        if (candidate != axis) {
+          tangentAxes[static_cast<std::size_t>(tangentIndex++)] = candidate;
+        }
+      }
+      for (const int direction : {-1, 1}) {
+        VisibleFace3D face;
+        face.worldAxis = axis;
+        face.normalDirection = direction;
+        face.material = BlockId::snow;
+        constexpr std::array<std::array<int, 2>, 4> offsets{{
+            {0, 0},
+            {1, 0},
+            {1, 1},
+            {0, 1},
+        }};
+        for (std::size_t corner = 0; corner < face.corners.size(); ++corner) {
+          Vec3 point = cloud.minimum;
+          point[static_cast<std::size_t>(axis)] +=
+              direction > 0 ? cloud.size : 0.0;
+          point[static_cast<std::size_t>(tangentAxes[0])] +=
+              offsets[corner][0] * cloud.size;
+          point[static_cast<std::size_t>(tangentAxes[1])] +=
+              offsets[corner][1] * cloud.size;
+          face.corners[corner] = point;
+        }
+        faces.push_back(face);
+      }
+    }
+  }
+  return faces;
+}
+
+void drawClouds3D(SDL_Renderer *renderer, const Camera3D &camera, int width,
+                  int height, double aspectRatio) {
+  std::vector<ProjectedFace3D> projected =
+      projectVisibleFaces3D(cloudFaces3D(camera.position), camera, aspectRatio);
+  std::ranges::sort(projected, std::greater{}, &ProjectedFace3D::depth);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  for (const ProjectedFace3D &face : projected) {
+    std::vector<SDL_Vertex> vertices;
+    std::vector<int> indices;
+    vertices.reserve(face.vertexCount);
+    for (std::size_t corner = 0; corner < face.vertexCount; ++corner) {
+      SDL_Vertex vertex{};
+      vertex.position.x =
+          static_cast<float>((face.vertices[corner].x + 1.0) * 0.5 * width);
+      vertex.position.y =
+          static_cast<float>((1.0 - face.vertices[corner].y) * 0.5 * height);
+      vertex.color = SDL_Color{235, 242, 250, 72};
+      vertices.push_back(vertex);
+    }
+    for (std::size_t corner = 1; corner + 1 < face.vertexCount; ++corner) {
+      indices.push_back(0);
+      indices.push_back(static_cast<int>(corner));
+      indices.push_back(static_cast<int>(corner + 1));
+    }
+    if (!vertices.empty()) {
+      static_cast<void>(SDL_RenderGeometry(
+          renderer, nullptr, vertices.data(), static_cast<int>(vertices.size()),
+          indices.data(), static_cast<int>(indices.size())));
+    }
+  }
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+}
+
 bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
             const Camera3D &camera, int width, int height,
             VisionGeometry3D &vision) {
@@ -766,10 +1385,12 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
     vision.faces = buildVisibleFaces3D(world, center);
     vision.geometryInitialized = true;
   }
-  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+  SDL_SetRenderDrawColor(renderer, skyColor.red, skyColor.green, skyColor.blue,
+                         255);
   SDL_RenderClear(renderer);
   const double aspectRatio =
       static_cast<double>(width) / static_cast<double>(height);
+  drawClouds3D(renderer, camera, width, height, aspectRatio);
   std::vector<ProjectedFace3D> projected =
       projectVisibleFaces3D(vision.faces, camera, aspectRatio);
   std::ranges::sort(projected, std::greater{}, &ProjectedFace3D::depth);
@@ -779,7 +1400,7 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
   indices.reserve(projected.size() * 6U);
   for (const ProjectedFace3D &face : projected) {
     const int firstVertex = static_cast<int>(vertices.size());
-    const auto color = visionBlockColor3D(face.worldAxis, face.block);
+    const auto color = visionBlockColor3D(face.material, face.block);
     for (std::size_t corner = 0; corner < face.vertexCount; ++corner) {
       const Vec2 &point = face.vertices[corner];
       SDL_Vertex vertex{};
@@ -818,7 +1439,6 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
   SDL_RenderDrawLine(renderer, width / 2, height / 2 - crosshairRadius,
                      width / 2, height / 2 + crosshairRadius);
   drawStatusBar(renderer, camera, width);
-  SDL_RenderPresent(renderer);
   return true;
 }
 
@@ -839,17 +1459,19 @@ bool saveRendererBitmap(SDL_Renderer *renderer, int width, int height,
 
 int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
                                TerrainMode terrainMode, bool smokeTest,
+                               bool inventorySmoke,
                                const std::string &smokeOutput) {
   const std::string worldName = terrainModeName(terrainMode);
   SDL_SetWindowTitle(window, ("Proj4D | 3D " + worldName +
                               " | Mouse: look | WASD: move | Shift: sneak")
                                  .c_str());
-  BlockWorld sharedWorld(terrainMode);
+  GameSession game(terrainMode, PlayDimension::Three);
+  BlockWorld &sharedWorld = game.world();
   std::optional<PersistentWorldSession> persistence;
   if (!smokeTest) {
     persistence.emplace();
     std::string saveError;
-    if (!initializePersistentWorld(sharedWorld, *persistence, saveError)) {
+    if (!initializePersistentWorld(game, *persistence, saveError)) {
       std::cerr << "Could not open the selected world: " << saveError << '\n';
       SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "World save error",
                                saveError.c_str(), window);
@@ -868,7 +1490,21 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
   camera.turnVertical(-0.28);
   PlayerMotionState3D playerMotion{0.0, true, spawnPosition};
   VisionGeometry3D vision;
+  InventoryUiState inventoryUi;
+  if (inventorySmoke) {
+    inventoryUi.open = true;
+    InventoryState preview;
+    preview.storage[0] = normalizedStack({BlockId::grass, 64});
+    preview.storage[1] = normalizedStack({BlockId::wood, 32});
+    preview.storage[2] = normalizedStack({BlockId::stone, 128});
+    preview.quick[0] = normalizedStack(
+        {BlockId::iron_tool, 1, maximumDurability(BlockId::iron_tool)});
+    preview.quick[1] = normalizedStack({BlockId::planks, 24});
+    preview.handCrafting[0] = normalizedStack({BlockId::wood, 1});
+    game.replaceInventory(std::move(preview));
+  }
   bool running = true;
+  bool miningHeld = false;
   bool renderFailed = false;
   std::uint64_t previousCounter = SDL_GetPerformanceCounter();
 
@@ -897,19 +1533,50 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
 
     SDL_Event event{};
     while (SDL_PollEvent(&event) != 0) {
-      if (event.type == SDL_QUIT ||
-          (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)) {
+      if (event.type == SDL_QUIT) {
         running = false;
-      } else if (event.type == SDL_MOUSEMOTION && !smokeTest) {
+      } else if (event.type == SDL_KEYDOWN &&
+                 event.key.keysym.sym == SDLK_ESCAPE) {
+        if (inventoryUi.open) {
+          inventoryUi.open = false;
+          SDL_SetRelativeMouseMode(smokeTest ? SDL_FALSE : SDL_TRUE);
+        } else {
+          running = false;
+        }
+      } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_t &&
+                 event.key.repeat == 0) {
+        inventoryUi.open = !inventoryUi.open;
+        inventoryUi.station = CraftingStation::Hand;
+        SDL_SetRelativeMouseMode(inventoryUi.open || smokeTest ? SDL_FALSE
+                                                               : SDL_TRUE);
+      } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym >= SDLK_1 &&
+                 event.key.keysym.sym <= SDLK_9) {
+        InventoryState changed = game.inventory();
+        selectQuickSlot(changed, PlayDimension::Three,
+                        static_cast<int>(event.key.keysym.sym - SDLK_1));
+        game.replaceInventory(std::move(changed));
+      } else if (event.type == SDL_MOUSEMOTION && !smokeTest &&
+                 !inventoryUi.open) {
         camera.turnHorizontal(static_cast<double>(event.motion.xrel) *
                               mouseLookRadiansPerPixel);
         camera.turnVertical(-static_cast<double>(event.motion.yrel) *
                             mouseLookRadiansPerPixel);
       } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+        if (inventoryUi.open) {
+          int width = 1;
+          int height = 1;
+          SDL_GetRendererOutputSize(renderer, &width, &height);
+          if (applyInventoryUiClick(game, PlayDimension::Three, inventoryUi,
+                                    width, height, event.button.x,
+                                    event.button.y, event.button.button) &&
+              persistence) {
+            static_cast<void>(persistChangedWorld(game, *persistence));
+          }
+          continue;
+        }
         bool worldChanged = false;
         if (event.button.button == SDL_BUTTON_LEFT) {
-          worldChanged =
-              breakAlongRay(world, camera.position, camera.forward(), 8.0);
+          miningHeld = true;
         } else if (event.button.button == SDL_BUTTON_RIGHT) {
           const std::array<BlockCoord3D, 2> protectedBlocks{{
               containingBlock(camera.position),
@@ -918,12 +1585,29 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
                                        ? playerSneakCollisionBounds
                                        : playerCollisionBounds),
           }};
-          worldChanged = buildAlongRay(world, camera.position, camera.forward(),
-                                       8.0, protectedBlocks);
+          if (const auto hit =
+                  raycast(world, camera.position, camera.forward(), 8.0)) {
+            if (world.blockAt(hit->block) == BlockId::crafting_table) {
+              inventoryUi.open = true;
+              inventoryUi.station = CraftingStation::Table;
+              SDL_SetRelativeMouseMode(SDL_FALSE);
+              continue;
+            }
+            const std::array<BlockCoord, 2> protected4D{{
+                blockCoord4D(protectedBlocks[0]),
+                blockCoord4D(protectedBlocks[1]),
+            }};
+            worldChanged =
+                game.placeSelected(blockCoord4D(hit->placement), protected4D);
+          }
         }
         if (worldChanged && persistence) {
-          static_cast<void>(persistChangedWorld(sharedWorld, *persistence));
+          static_cast<void>(persistChangedWorld(game, *persistence));
         }
+      } else if (event.type == SDL_MOUSEBUTTONUP &&
+                 event.button.button == SDL_BUTTON_LEFT) {
+        miningHeld = false;
+        game.cancelMining();
       }
     }
 
@@ -935,8 +1619,19 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
             (keys[SDL_SCANCODE_A] != 0 ? 1.0 : 0.0),
         keys[SDL_SCANCODE_LSHIFT] != 0 || keys[SDL_SCANCODE_RSHIFT] != 0,
     };
-    updatePlayerMotion(camera, world, playerMotion, movement,
-                       keys[SDL_SCANCODE_SPACE] != 0, deltaSeconds);
+    if (!inventoryUi.open) {
+      updatePlayerMotion(camera, world, playerMotion, movement,
+                         keys[SDL_SCANCODE_SPACE] != 0, deltaSeconds);
+    }
+    const auto miningHit =
+        raycast(world, camera.position, camera.forward(), 8.0);
+    if (game.updateMining(miningHit
+                              ? std::optional(blockCoord4D(miningHit->block))
+                              : std::nullopt,
+                          miningHeld && !inventoryUi.open, deltaSeconds) &&
+        persistence) {
+      static_cast<void>(persistChangedWorld(game, *persistence));
+    }
 
     int width = 1;
     int height = 1;
@@ -947,6 +1642,13 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
       running = false;
       continue;
     }
+    drawQuickStorage(renderer, game.inventory(), PlayDimension::Three, width,
+                     height);
+    if (inventoryUi.open) {
+      drawInventoryOverlay(renderer, game.inventory(), PlayDimension::Three,
+                           inventoryUi, width, height);
+    }
+    SDL_RenderPresent(renderer);
 
     ++frameCount;
     if (!smokeTest && frameCount % 60 == 0) {
@@ -966,25 +1668,26 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
     }
   }
 
-  const bool saved =
-      !persistence || persistChangedWorld(sharedWorld, *persistence);
+  const bool saved = !persistence || persistChangedWorld(game, *persistence);
   return renderFailed || !saved ? 1 : 0;
 }
 
 int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
                              TerrainMode terrainMode, bool smokeTest,
+                             bool inventorySmoke,
                              const std::string &smokeOutput) {
   const std::string worldName = terrainModeName(terrainMode);
   SDL_SetWindowTitle(window,
                      ("Proj4D | 2D " + worldName +
                       " | Mouse: vertical look | Z: reverse | Shift: sneak")
                          .c_str());
-  BlockWorld sharedWorld(terrainMode);
+  GameSession game(terrainMode, PlayDimension::Two);
+  BlockWorld &sharedWorld = game.world();
   std::optional<PersistentWorldSession> persistence;
   if (!smokeTest) {
     persistence.emplace();
     std::string saveError;
-    if (!initializePersistentWorld(sharedWorld, *persistence, saveError)) {
+    if (!initializePersistentWorld(game, *persistence, saveError)) {
       std::cerr << "Could not open the selected world: " << saveError << '\n';
       SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "World save error",
                                saveError.c_str(), window);
@@ -1001,7 +1704,21 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
   camera.position = spawnPosition;
   camera.turnVertical(-0.28);
   PlayerMotionState2D playerMotion{0.0, true, spawnPosition};
+  InventoryUiState inventoryUi;
+  if (inventorySmoke) {
+    inventoryUi.open = true;
+    InventoryState preview;
+    const auto storage = visibleStorageSlots(PlayDimension::Two);
+    preview.storage[storage[0]] = normalizedStack({BlockId::grass, 64});
+    preview.storage[storage[1]] = normalizedStack({BlockId::wood, 32});
+    const auto quick = visibleQuickSlots(PlayDimension::Two);
+    preview.quick[quick[0]] = normalizedStack(
+        {BlockId::stone_tool, 1, maximumDurability(BlockId::stone_tool)});
+    preview.handCrafting[0] = normalizedStack({BlockId::wood, 1});
+    game.replaceInventory(std::move(preview));
+  }
   bool running = true;
+  bool miningHeld = false;
   std::uint64_t previousCounter = SDL_GetPerformanceCounter();
 
   if (!smokeTest) {
@@ -1033,18 +1750,47 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
         running = false;
       } else if (event.type == SDL_KEYDOWN &&
                  event.key.keysym.sym == SDLK_ESCAPE) {
-        running = false;
-      } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_z &&
+        if (inventoryUi.open) {
+          inventoryUi.open = false;
+          SDL_SetRelativeMouseMode(smokeTest ? SDL_FALSE : SDL_TRUE);
+        } else {
+          running = false;
+        }
+      } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_t &&
                  event.key.repeat == 0) {
+        inventoryUi.open = !inventoryUi.open;
+        inventoryUi.station = CraftingStation::Hand;
+        SDL_SetRelativeMouseMode(inventoryUi.open || smokeTest ? SDL_FALSE
+                                                               : SDL_TRUE);
+      } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym >= SDLK_1 &&
+                 event.key.keysym.sym <= SDLK_3) {
+        InventoryState changed = game.inventory();
+        selectQuickSlot(changed, PlayDimension::Two,
+                        static_cast<int>(event.key.keysym.sym - SDLK_1));
+        game.replaceInventory(std::move(changed));
+      } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_z &&
+                 event.key.repeat == 0 && !inventoryUi.open) {
         camera.reverseHorizontalView();
-      } else if (event.type == SDL_MOUSEMOTION && !smokeTest) {
+      } else if (event.type == SDL_MOUSEMOTION && !smokeTest &&
+                 !inventoryUi.open) {
         camera.turnVertical(-static_cast<double>(event.motion.yrel) *
                             mouseLookRadiansPerPixel);
       } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+        if (inventoryUi.open) {
+          int width = 1;
+          int height = 1;
+          SDL_GetRendererOutputSize(renderer, &width, &height);
+          if (applyInventoryUiClick(game, PlayDimension::Two, inventoryUi,
+                                    width, height, event.button.x,
+                                    event.button.y, event.button.button) &&
+              persistence) {
+            static_cast<void>(persistChangedWorld(game, *persistence));
+          }
+          continue;
+        }
         bool worldChanged = false;
         if (event.button.button == SDL_BUTTON_LEFT) {
-          worldChanged =
-              breakAlongRay(world, camera.position, camera.forward(), 8.0);
+          miningHeld = true;
         } else if (event.button.button == SDL_BUTTON_RIGHT) {
           const std::array<BlockCoord2D, 2> protectedBlocks{{
               containingBlock(camera.position),
@@ -1053,12 +1799,29 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
                                        ? playerSneakCollisionBounds
                                        : playerCollisionBounds),
           }};
-          worldChanged = buildAlongRay(world, camera.position, camera.forward(),
-                                       8.0, protectedBlocks);
+          if (const auto hit =
+                  raycast(world, camera.position, camera.forward(), 8.0)) {
+            if (world.blockAt(hit->block) == BlockId::crafting_table) {
+              inventoryUi.open = true;
+              inventoryUi.station = CraftingStation::Table;
+              SDL_SetRelativeMouseMode(SDL_FALSE);
+              continue;
+            }
+            const std::array<BlockCoord, 2> protected4D{{
+                blockCoord4D(protectedBlocks[0]),
+                blockCoord4D(protectedBlocks[1]),
+            }};
+            worldChanged =
+                game.placeSelected(blockCoord4D(hit->placement), protected4D);
+          }
         }
         if (worldChanged && persistence) {
-          static_cast<void>(persistChangedWorld(sharedWorld, *persistence));
+          static_cast<void>(persistChangedWorld(game, *persistence));
         }
+      } else if (event.type == SDL_MOUSEBUTTONUP &&
+                 event.button.button == SDL_BUTTON_LEFT) {
+        miningHeld = false;
+        game.cancelMining();
       }
     }
 
@@ -1068,13 +1831,31 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
             (keys[SDL_SCANCODE_S] != 0 ? 1.0 : 0.0),
         keys[SDL_SCANCODE_LSHIFT] != 0 || keys[SDL_SCANCODE_RSHIFT] != 0,
     };
-    updatePlayerMotion(camera, world, playerMotion, movement,
-                       keys[SDL_SCANCODE_SPACE] != 0, deltaSeconds);
+    if (!inventoryUi.open) {
+      updatePlayerMotion(camera, world, playerMotion, movement,
+                         keys[SDL_SCANCODE_SPACE] != 0, deltaSeconds);
+    }
+    const auto miningHit =
+        raycast(world, camera.position, camera.forward(), 8.0);
+    if (game.updateMining(miningHit
+                              ? std::optional(blockCoord4D(miningHit->block))
+                              : std::nullopt,
+                          miningHeld && !inventoryUi.open, deltaSeconds) &&
+        persistence) {
+      static_cast<void>(persistChangedWorld(game, *persistence));
+    }
 
     int width = 1;
     int height = 1;
     SDL_GetRendererOutputSize(renderer, &width, &height);
     render(renderer, world, camera, width, height);
+    drawQuickStorage(renderer, game.inventory(), PlayDimension::Two, width,
+                     height);
+    if (inventoryUi.open) {
+      drawInventoryOverlay(renderer, game.inventory(), PlayDimension::Two,
+                           inventoryUi, width, height);
+    }
+    SDL_RenderPresent(renderer);
 
     ++frameCount;
     if (!smokeTest && frameCount % 60 == 0) {
@@ -1093,8 +1874,7 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
       running = false;
     }
   }
-  const bool saved =
-      !persistence || persistChangedWorld(sharedWorld, *persistence);
+  const bool saved = !persistence || persistChangedWorld(game, *persistence);
   return frameCount < 0 || !saved ? 1 : 0;
 }
 
@@ -1110,6 +1890,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
     std::cerr << "SDL initialization failed: " << SDL_GetError() << '\n';
     return 1;
   }
+  SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
   constexpr int initialWidth = 1120;
   constexpr int initialHeight = 800;
@@ -1157,12 +1938,14 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   const bool twoDimensionalSmoke = mode == RunMode::TwoDTerrainMenuSmokeTest ||
                                    mode == RunMode::TwoDFlatSmokeTest ||
                                    mode == RunMode::TwoDLowSmokeTest ||
-                                   mode == RunMode::TwoDHighSmokeTest;
+                                   mode == RunMode::TwoDHighSmokeTest ||
+                                   mode == RunMode::TwoDInventorySmokeTest;
   const bool threeDimensionalSmoke =
       mode == RunMode::ThreeDTerrainMenuSmokeTest ||
       mode == RunMode::ThreeDFlatSmokeTest ||
       mode == RunMode::ThreeDLowSmokeTest ||
-      mode == RunMode::ThreeDHighSmokeTest;
+      mode == RunMode::ThreeDHighSmokeTest ||
+      mode == RunMode::ThreeDInventorySmokeTest;
   std::optional<WorldDimension> selectedDimension;
   if (mode == RunMode::Interactive) {
     selectedDimension = chooseWorldDimension(renderer);
@@ -1221,7 +2004,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
 
   if (*selectedDimension == WorldDimension::Two) {
     const int result = runTwoDimensionalSession(
-        renderer, window, *selectedTerrain, smokeTest, smokeOutput);
+        renderer, window, *selectedTerrain, smokeTest,
+        mode == RunMode::TwoDInventorySmokeTest, smokeOutput);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
@@ -1230,7 +2014,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
 
   if (*selectedDimension == WorldDimension::Three) {
     const int result = runThreeDimensionalSession(
-        renderer, window, *selectedTerrain, smokeTest, smokeOutput);
+        renderer, window, *selectedTerrain, smokeTest,
+        mode == RunMode::ThreeDInventorySmokeTest, smokeOutput);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
@@ -1242,12 +2027,13 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                               " World | Mouse: 4D look | Tab: vertical | "
                               "Ctrl: orbit | Shift: sneak | WASDQE move")
                                  .c_str());
-  BlockWorld world(*selectedTerrain);
+  GameSession game(*selectedTerrain, PlayDimension::Four);
+  BlockWorld &world = game.world();
   std::optional<PersistentWorldSession> persistence;
   if (!smokeTest) {
     persistence.emplace();
     std::string saveError;
-    if (!initializePersistentWorld(world, *persistence, saveError)) {
+    if (!initializePersistentWorld(game, *persistence, saveError)) {
       std::cerr << "Could not open the selected world: " << saveError << '\n';
       SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "World save error",
                                saveError.c_str(), window);
@@ -1269,8 +2055,23 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   camera.turnVertical(-0.28);
   DisplayCamera display;
   FeatureGeometryCache geometryCache;
+  InventoryUiState inventoryUi;
+  if (mode == RunMode::FourDInventorySmokeTest) {
+    inventoryUi.open = true;
+    InventoryState preview;
+    preview.storage[0] = normalizedStack({BlockId::grass, 64});
+    preview.storage[5] = normalizedStack({BlockId::wood, 32});
+    preview.storage[18] = normalizedStack({BlockId::copper_ore, 16});
+    preview.storage[42] = normalizedStack({BlockId::glass, 24});
+    preview.quick[0] = normalizedStack(
+        {BlockId::iron_tool, 1, maximumDurability(BlockId::iron_tool)});
+    preview.quick[13] = normalizedStack({BlockId::planks, 24});
+    preview.handCrafting[0] = normalizedStack({BlockId::wood, 1});
+    game.replaceInventory(std::move(preview));
+  }
   PlayerMotionState playerMotion{0.0, true, spawnPosition};
   bool running = true;
+  bool miningHeld = false;
   std::uint64_t previousCounter = SDL_GetPerformanceCounter();
 
   if (!smokeTest) {
@@ -1308,8 +2109,35 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
         running = false;
       } else if (event.type == SDL_KEYDOWN &&
                  event.key.keysym.sym == SDLK_ESCAPE) {
-        running = false;
+        if (inventoryUi.open) {
+          inventoryUi.open = false;
+          SDL_SetRelativeMouseMode(smokeTest ? SDL_FALSE : SDL_TRUE);
+        } else {
+          running = false;
+        }
+      } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_t &&
+                 event.key.repeat == 0) {
+        inventoryUi.open = !inventoryUi.open;
+        inventoryUi.station = CraftingStation::Hand;
+        SDL_SetRelativeMouseMode(inventoryUi.open || smokeTest ? SDL_FALSE
+                                                               : SDL_TRUE);
+      } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym >= SDLK_1 &&
+                 event.key.keysym.sym <= SDLK_9) {
+        InventoryState changed = game.inventory();
+        selectQuickSlot(changed, PlayDimension::Four,
+                        static_cast<int>(event.key.keysym.sym - SDLK_1));
+        game.replaceInventory(std::move(changed));
       } else if (event.type == SDL_MOUSEMOTION && !smokeTest) {
+        if (inventoryUi.open) {
+          if ((event.motion.state & SDL_BUTTON_RMASK) != 0U) {
+            inventoryUi.yaw += static_cast<double>(event.motion.xrel) * 0.008;
+            inventoryUi.pitch =
+                std::clamp(inventoryUi.pitch +
+                               static_cast<double>(event.motion.yrel) * 0.008,
+                           -pi * 0.48, pi * 0.48);
+          }
+          continue;
+        }
         const SDL_Keymod modifiers = SDL_GetModState();
         const Uint8 *keys = SDL_GetKeyboardState(nullptr);
         const MouseMotionMode mouseMode = selectMouseMotionMode(
@@ -1329,10 +2157,23 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
             display.distance - static_cast<double>(event.wheel.y) * 0.2, 2.6,
             6.5);
       } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+        if (inventoryUi.open) {
+          int width = 1;
+          int height = 1;
+          SDL_GetRendererOutputSize(renderer, &width, &height);
+          if (event.button.button != SDL_BUTTON_RIGHT) {
+            if (applyInventoryUiClick(game, PlayDimension::Four, inventoryUi,
+                                      width, height, event.button.x,
+                                      event.button.y, event.button.button) &&
+                persistence) {
+              static_cast<void>(persistChangedWorld(game, *persistence));
+            }
+          }
+          continue;
+        }
         bool worldChanged = false;
         if (event.button.button == SDL_BUTTON_LEFT) {
-          worldChanged =
-              breakAlongRay(world, camera.position, camera.forward, 8.0);
+          miningHeld = true;
         } else if (event.button.button == SDL_BUTTON_RIGHT) {
           const std::array<BlockCoord, 2> protectedBlocks{{
               containingBlock(camera.position),
@@ -1341,12 +2182,24 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                                        ? playerSneakCollisionBounds
                                        : playerCollisionBounds),
           }};
-          worldChanged = buildAlongRay(world, camera.position, camera.forward,
-                                       8.0, protectedBlocks);
+          if (const auto hit =
+                  raycast(world, camera.position, camera.forward, 8.0)) {
+            if (world.blockAt(hit->block) == BlockId::crafting_table) {
+              inventoryUi.open = true;
+              inventoryUi.station = CraftingStation::Table;
+              SDL_SetRelativeMouseMode(SDL_FALSE);
+              continue;
+            }
+            worldChanged = game.placeSelected(hit->placement, protectedBlocks);
+          }
         }
         if (worldChanged && persistence) {
-          static_cast<void>(persistChangedWorld(world, *persistence));
+          static_cast<void>(persistChangedWorld(game, *persistence));
         }
+      } else if (event.type == SDL_MOUSEBUTTONUP &&
+                 event.button.button == SDL_BUTTON_LEFT) {
+        miningHeld = false;
+        game.cancelMining();
       }
     }
 
@@ -1364,13 +2217,29 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
     camera.turnVertical(((keys[SDL_SCANCODE_UP] != 0 ? 1.0 : 0.0) -
                          (keys[SDL_SCANCODE_DOWN] != 0 ? 1.0 : 0.0)) *
                         turnSpeed * deltaSeconds);
-    updatePlayerMotion(camera, world, playerMotion, movement,
-                       keys[SDL_SCANCODE_SPACE] != 0, deltaSeconds);
+    if (!inventoryUi.open) {
+      updatePlayerMotion(camera, world, playerMotion, movement,
+                         keys[SDL_SCANCODE_SPACE] != 0, deltaSeconds);
+    }
+    const auto miningHit = raycast(world, camera.position, camera.forward, 8.0);
+    if (game.updateMining(miningHit ? std::optional(miningHit->block)
+                                    : std::nullopt,
+                          miningHeld && !inventoryUi.open, deltaSeconds) &&
+        persistence) {
+      static_cast<void>(persistChangedWorld(game, *persistence));
+    }
 
     int width = initialWidth;
     int height = initialHeight;
     SDL_GetRendererOutputSize(renderer, &width, &height);
     render(renderer, world, camera, display, width, height, geometryCache);
+    drawQuickStorage(renderer, game.inventory(), PlayDimension::Four, width,
+                     height);
+    if (inventoryUi.open) {
+      drawInventoryOverlay(renderer, game.inventory(), PlayDimension::Four,
+                           inventoryUi, width, height);
+    }
+    SDL_RenderPresent(renderer);
 
     ++frameCount;
     if (!smokeTest && frameCount % 60 == 0) {
@@ -1391,8 +2260,9 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
     }
   }
 
-  const bool saved = !persistence || persistChangedWorld(world, *persistence);
+  const bool saved = !persistence || persistChangedWorld(game, *persistence);
 
+  SDL_DestroyTexture(geometryCache.volumeTexture);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();

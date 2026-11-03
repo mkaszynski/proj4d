@@ -21,6 +21,8 @@ inline constexpr int visionMaximumBrightnessPercent2D = 118;
 [[nodiscard]] int blockBrightnessPercent2D(const BlockCoord2D &block);
 [[nodiscard]] std::array<std::uint8_t, 3>
 visionBlockColor2D(int worldAxis, const BlockCoord2D &block);
+[[nodiscard]] std::array<std::uint8_t, 3>
+visionBlockColor2D(BlockId material, const BlockCoord2D &block);
 
 struct VisionSample2D {
   bool solid{};
@@ -28,6 +30,7 @@ struct VisionSample2D {
   double distance{};
   BlockCoord2D block{};
   bool targeted{};
+  BlockId material{BlockId::air};
 };
 
 [[nodiscard]] std::vector<VisionSample2D>

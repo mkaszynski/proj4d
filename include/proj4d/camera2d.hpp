@@ -17,7 +17,7 @@ public:
   Vec2 position{0.5, 2.65};
   double focalLength{0.72};
   double nearPlane{0.08};
-  double farPlane{24.0};
+  double farPlane{96.0};
 
   void turnVertical(double radians);
   void reverseHorizontalView();
