@@ -74,6 +74,13 @@ Apply these invariants to every change in the Proj4D repository.
   preserving material hue. Keep the upward boundary brightest, downward
   boundary darkest, and all eight directions visibly distinct; do not use
   frame-time randomness or add a dynamic lighting system.
+- Keep generated water and lava as non-flowing, non-solid fluid blocks. Render
+  their exposed outer shells translucently, cull boundaries between identical
+  adjacent fluids, preserve opaque terrain behind them, and add a bounded
+  immersion tint when the camera is inside fluid. In 4D, weight fluid path
+  contributions by opacity without making compositing order dependent; in 3D
+  use far-to-near alpha blending; in 2D composite all depth-sorted intervals
+  rather than stopping at the nearest fluid edge.
 - Never treat a missing or not-yet-cached neighbor chunk as air. Publish new
   visible geometry only after its required chunk set is ready. During cached
   per-chunk extraction, conservatively treat data outside that set as opaque
@@ -97,6 +104,10 @@ Apply these invariants to every change in the Proj4D repository.
   0.15-block body radius on `x`, `z`, and `w`, 1.65 eye-to-feet and 0.18
   eye-to-head bounds, a 50-millisecond delta cap, 0.25-block collision
   substeps, and axis-separated 4D wall sliding.
+- Let the player swim through water and lava in every dimension. Fluids must
+  never become collision solids. Use the shared reduced swim speed, gravity,
+  and drag; held `Space` rises and held `Shift` descends instead of activating
+  the terrestrial sneak pose while the body intersects fluid.
 
 ## Preserve Conventional 3D Vision and Play
 
@@ -199,6 +210,10 @@ Apply these invariants to every change in the Proj4D repository.
   frame may enqueue work and collect completed chunks but must never wait on a
   future, join a generation task, or synchronously generate an unseen neighbor.
   Retain the last complete geometry while a newly requested set is loading.
+- On a new session, prioritize a smaller exact inner chunk set and publish it
+  as soon as it is complete while the full render distance streams behind it.
+  Never show partial chunks or interpret the unfinished outer set as air, and
+  require graphical smoke captures to wait for full-distance geometry.
 - Preserve explicit numeric guards for topology-region volume, loaded-chunk
   count, and measured smoke/startup time. Justify any increase with before/after
   evidence.

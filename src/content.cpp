@@ -38,11 +38,26 @@ bool isSolid(BlockId block) {
   return solidBlocks[static_cast<std::uint8_t>(block)];
 }
 
+bool isFluid(BlockId block) {
+  return block == BlockId::water || block == BlockId::lava;
+}
+
 bool isKnownBlock(BlockId block) {
   return hypercraft::ContentRegistry::default_registry().has_definition(block);
 }
 
 bool isRenderable(BlockId block) { return definition(block).renderable; }
+
+std::uint8_t blockOpacity(BlockId block) {
+  switch (block) {
+  case BlockId::water:
+    return 112U;
+  case BlockId::lava:
+    return 168U;
+  default:
+    return 255U;
+  }
+}
 
 bool isPlaceable(BlockId block) { return definition(block).placeable; }
 

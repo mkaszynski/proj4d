@@ -23,8 +23,10 @@ struct BlockColor {
 inline constexpr BlockColor skyColor{92, 157, 232};
 
 [[nodiscard]] bool isSolid(BlockId block);
+[[nodiscard]] bool isFluid(BlockId block);
 [[nodiscard]] bool isKnownBlock(BlockId block);
 [[nodiscard]] bool isRenderable(BlockId block);
+[[nodiscard]] std::uint8_t blockOpacity(BlockId block);
 [[nodiscard]] bool isPlaceable(BlockId block);
 [[nodiscard]] bool isStorable(BlockId block);
 [[nodiscard]] bool isTool(BlockId block);

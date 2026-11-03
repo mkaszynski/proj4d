@@ -106,6 +106,22 @@ bool playerCollidesAt(const BlockWorld2D &world, const Vec2 &eyePosition,
   return false;
 }
 
+bool playerIntersectsFluid(const BlockWorld2D &world, const Vec2 &eyePosition,
+                           PlayerCollisionBounds bounds) {
+  const int minimumX = blockMinimum(eyePosition.x - bounds.radius);
+  const int minimumY = blockMinimum(eyePosition.y - bounds.eyeToFeet);
+  const int maximumX = blockMaximum(eyePosition.x + bounds.radius);
+  const int maximumY = blockMaximum(eyePosition.y + bounds.eyeToHead);
+  for (int y = minimumY; y <= maximumY; ++y) {
+    for (int x = minimumX; x <= maximumX; ++x) {
+      if (isFluid(world.blockAt({x, y}))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 Vec2 resolvePlayerMotion(const BlockWorld2D &world, const Vec2 &eyePosition,
                          const Vec2 &desiredMotion,
                          PlayerCollisionBounds bounds) {
@@ -117,11 +133,15 @@ void updatePlayerMotion(Camera2D &camera, const BlockWorld2D &world,
                         PlayerMotionState2D &state, PlayerMoveInput2D moveInput,
                         bool jumpInput, double deltaSeconds) {
   deltaSeconds = std::clamp(deltaSeconds, 0.0, playerMaximumDeltaSeconds);
-  updateSneakPose(camera, world, state, moveInput.sneak);
+  state.swimming = playerIntersectsFluid(world, camera.position);
+  updateSneakPose(camera, world, state, moveInput.sneak && !state.swimming);
   const PlayerCollisionBounds activeBounds =
       state.sneaking ? playerSneakCollisionBounds : playerCollisionBounds;
+  state.swimming = playerIntersectsFluid(world, camera.position, activeBounds);
   const double movementSpeed =
-      playerWalkSpeed * (state.sneaking ? playerSneakSpeedMultiplier : 1.0);
+      state.swimming ? playerSwimSpeed
+                     : playerWalkSpeed *
+                           (state.sneaking ? playerSneakSpeedMultiplier : 1.0);
   const Vec2 planarMotion = camera.movementForward() *
                             (moveInput.forward * movementSpeed * deltaSeconds);
   const double maximumMotion = std::max(
@@ -135,32 +155,51 @@ void updatePlayerMotion(Camera2D &camera, const BlockWorld2D &world,
   for (int step = 0; step < steps; ++step) {
     const double stepDelta = deltaSeconds / static_cast<double>(steps);
     const bool jumpRequested = jumpInput && step == 0;
-    state.grounded = hasGroundContact(world, camera.position, activeBounds);
+    state.swimming =
+        playerIntersectsFluid(world, camera.position, activeBounds);
+    state.grounded = !state.swimming &&
+                     hasGroundContact(world, camera.position, activeBounds);
     if (state.grounded && state.verticalVelocity < 0.0) {
       state.verticalVelocity = 0.0;
     }
-    if (jumpRequested && state.grounded) {
+    if (state.swimming) {
+      state.grounded = false;
+      if (jumpInput) {
+        state.verticalVelocity = playerSwimVerticalSpeed;
+      } else if (moveInput.sneak) {
+        state.verticalVelocity = -playerSwimVerticalSpeed;
+      } else {
+        state.verticalVelocity -= playerFluidGravity * stepDelta;
+        state.verticalVelocity *=
+            std::max(0.0, 1.0 - playerFluidDrag * stepDelta);
+      }
+    } else if (jumpRequested && state.grounded) {
       state.verticalVelocity =
           std::sqrt(2.0 * playerGravity * playerJumpHeight);
       state.grounded = false;
     }
 
-    state.verticalVelocity -= playerGravity * stepDelta;
+    if (!state.swimming) {
+      state.verticalVelocity -= playerGravity * stepDelta;
+    }
     const Vec2 desiredMotion{planarMotion.x / static_cast<double>(steps),
                              state.verticalVelocity * stepDelta};
     const Vec2 acceptedMotion = resolveWithEdgeProtection(
         world, camera.position, desiredMotion, activeBounds,
-        state.sneaking && state.grounded);
+        !state.swimming && state.sneaking && state.grounded);
     camera.position += acceptedMotion;
+    state.swimming =
+        playerIntersectsFluid(world, camera.position, activeBounds);
 
     if (desiredMotion.y < 0.0 && acceptedMotion.y == 0.0) {
       state.verticalVelocity = 0.0;
-      state.grounded = true;
+      state.grounded = !state.swimming;
     } else if (desiredMotion.y > 0.0 && acceptedMotion.y == 0.0) {
       state.verticalVelocity = 0.0;
       state.grounded = false;
     } else {
-      state.grounded = hasGroundContact(world, camera.position, activeBounds);
+      state.grounded = !state.swimming &&
+                       hasGroundContact(world, camera.position, activeBounds);
     }
   }
 
@@ -169,6 +208,7 @@ void updatePlayerMotion(Camera2D &camera, const BlockWorld2D &world,
     state.verticalVelocity = 0.0;
     state.grounded = false;
     state.sneaking = false;
+    state.swimming = false;
   }
 }
 

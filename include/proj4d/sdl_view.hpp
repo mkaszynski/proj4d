@@ -22,6 +22,9 @@ enum class RunMode {
   FourDInventorySmokeTest,
   ThreeDInventorySmokeTest,
   TwoDInventorySmokeTest,
+  FourDFluidSmokeTest,
+  ThreeDFluidSmokeTest,
+  TwoDFluidSmokeTest,
 };
 
 int runApplication(RunMode mode, const std::string &smokeOutput);

@@ -54,7 +54,11 @@ struct ScreenPoint {
 };
 
 struct FeatureGeometryCache {
+  std::uint64_t startupCounter{SDL_GetPerformanceCounter()};
+  bool initialStartupReported{};
+  bool fullStartupReported{};
   BlockCoord center{};
+  int radius{-1};
   std::uint64_t worldRevision{std::numeric_limits<std::uint64_t>::max()};
   bool initialized{};
   VisibilityGrid4D visibilityGrid;
@@ -82,6 +86,30 @@ struct FeatureGeometryCache {
   int volumeDisplayHeight{};
   bool volumeInitialized{};
 };
+
+void reportStartupStage(const char *dimension, int radius, int fullRadius,
+                        std::size_t loadedChunks, std::uint64_t startupCounter,
+                        bool &initialReported, bool &fullReported) {
+  if (std::getenv("PROJ4D_PROFILE_STARTUP") == nullptr) {
+    return;
+  }
+  const double milliseconds =
+      static_cast<double>(SDL_GetPerformanceCounter() - startupCounter) *
+      1000.0 / static_cast<double>(SDL_GetPerformanceFrequency());
+  if (!initialReported) {
+    std::cerr << dimension
+              << " startup profile: first_geometry=" << milliseconds
+              << " ms, radius=" << radius << ", loaded_chunks=" << loadedChunks
+              << '\n';
+    initialReported = true;
+  }
+  if (radius == fullRadius && !fullReported) {
+    std::cerr << dimension << " startup profile: full_geometry=" << milliseconds
+              << " ms, radius=" << radius << ", loaded_chunks=" << loadedChunks
+              << '\n';
+    fullReported = true;
+  }
+}
 
 struct InventoryUiState {
   bool open{};
@@ -263,13 +291,14 @@ std::optional<ScreenPoint> projectForDisplay(Vec3 point,
 
 void drawLine3(SDL_Renderer *renderer, const DisplayCamera &display, int width,
                int height, const Line3 &line,
-               const std::array<std::uint8_t, 3> &color) {
+               const std::array<std::uint8_t, 3> &color,
+               std::uint8_t alpha = 255U) {
   const auto from = projectForDisplay(line.from, display, width, height);
   const auto to = projectForDisplay(line.to, display, width, height);
   if (!from || !to) {
     return;
   }
-  SDL_SetRenderDrawColor(renderer, color[0], color[1], color[2], 255);
+  SDL_SetRenderDrawColor(renderer, color[0], color[1], color[2], alpha);
   SDL_RenderDrawLine(renderer, from->x, from->y, to->x, to->y);
 }
 
@@ -290,6 +319,20 @@ void drawVisionCube(SDL_Renderer *renderer, const DisplayCamera &display,
       drawLine3(renderer, display, width, height, {from, to, -1}, {62, 74, 91});
     }
   }
+}
+
+void drawFluidImmersion(SDL_Renderer *renderer, BlockId material, int width,
+                        int height) {
+  if (!isFluid(material)) {
+    return;
+  }
+  const BlockColor color = blockColor(material);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SDL_SetRenderDrawColor(renderer, color.red, color.green, color.blue,
+                         blockOpacity(material) / 3U);
+  const SDL_Rect display{0, 0, width, height};
+  SDL_RenderFillRect(renderer, &display);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
 void drawVisionCubeSky(SDL_Renderer *renderer, const DisplayCamera &display,
@@ -1114,23 +1157,36 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
   const std::uint64_t frameStart = SDL_GetPerformanceCounter();
   std::uint64_t topologyDone = frameStart;
   const BlockCoord center = containingBlock(camera.position);
+  constexpr int initialRadius = 3;
   if (!geometryCache.initialized || geometryCache.center != center ||
-      geometryCache.worldRevision != world.revision()) {
-    if (world.prepareRegion(center, renderBlockRadius)) {
+      geometryCache.worldRevision != world.revision() ||
+      geometryCache.radius < renderBlockRadius) {
+    const int requestedRadius =
+        geometryCache.initialized ? renderBlockRadius : initialRadius;
+    const bool ready = world.prepareRegion(center, requestedRadius);
+    if (!geometryCache.initialized) {
+      static_cast<void>(world.prepareRegion(center, renderBlockRadius));
+    }
+    if (ready) {
       const bool mayReuse = geometryCache.initialized &&
                             geometryCache.worldRevision == world.revision();
       geometryCache.visibilityGrid = buildVisibilityGrid4D(
-          world, center, renderBlockRadius,
+          world, center, requestedRadius,
           mayReuse ? &geometryCache.visibilityGrid : nullptr);
       geometryCache.center = center;
+      geometryCache.radius = requestedRadius;
       geometryCache.worldRevision = world.revision();
       geometryCache.boundaryCells = buildVisibleBoundaryCells(
-          geometryCache.visibilityGrid, center, renderBlockRadius);
+          geometryCache.visibilityGrid, center, requestedRadius);
       geometryCache.edges = buildFeatureEdges(geometryCache.boundaryCells);
       geometryCache.initialized = true;
       geometryCache.volumeInitialized = false;
       geometryCache.linesInitialized = false;
       topologyDone = SDL_GetPerformanceCounter();
+      reportStartupStage("4D", requestedRadius, renderBlockRadius,
+                         world.loadedChunkCount(), geometryCache.startupCounter,
+                         geometryCache.initialStartupReported,
+                         geometryCache.fullStartupReported);
     }
   }
   const auto sameVector = [](const Vec4 &left, const Vec4 &right) {
@@ -1165,7 +1221,9 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
     }
     volumes.insert(volumes.end(), cloudVolumes.begin(), cloudVolumes.end());
     const AveragedVolumeImage volumeImage = renderAveragedVolume4D(
-        volumes, {display.yaw, display.pitch, display.distance}, width, height);
+        volumes, {display.yaw, display.pitch, display.distance}, width, height,
+        maximumVolumeImageWidth,
+        geometryCache.visibilityGrid.blockAt(containingBlock(camera.position)));
     if (geometryCache.volumeTexture == nullptr ||
         geometryCache.volumeWidth != volumeImage.width ||
         geometryCache.volumeHeight != volumeImage.height) {
@@ -1253,12 +1311,16 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
                 << '\n';
     }
   }
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
   for (const Line3 &line : geometryCache.visibleLines) {
     drawLine3(renderer, display, width, height, line,
               line.material == BlockId::air
                   ? std::array<std::uint8_t, 3>{255, 255, 255}
-                  : blockColor(line.material).array());
+                  : blockColor(line.material).array(),
+              line.material == BlockId::air ? 255U
+                                            : blockOpacity(line.material));
   }
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
   drawCrosshair(renderer, display, width, height);
   drawStatusBar(renderer, camera, width);
 }
@@ -1268,7 +1330,11 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
             struct VisionGeometry2D &vision);
 
 struct VisionGeometry2D {
+  std::uint64_t startupCounter{SDL_GetPerformanceCounter()};
+  bool initialStartupReported{};
+  bool fullStartupReported{};
   BlockCoord2D center{};
+  int radius{-1};
   std::uint64_t worldRevision{std::numeric_limits<std::uint64_t>::max()};
   bool initialized{};
   std::unordered_map<ChunkCoord, std::vector<VisibleEdge2D>, ChunkCoordHash>
@@ -1337,11 +1403,20 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
   const BlockCoord2D center = containingBlock(camera.position);
+  constexpr int initialRadius = 8;
   if (!vision.initialized || vision.center != center ||
-      vision.worldRevision != world.revision()) {
+      vision.worldRevision != world.revision() ||
+      vision.radius < terrainRenderDistance2D) {
+    const int requestedRadius =
+        vision.initialized ? terrainRenderDistance2D : initialRadius;
     const std::vector<ChunkCoord> visibleChunks =
-        chunksFor2D(center, terrainRenderDistance2D);
-    if (world.prepareChunks(visibleChunks)) {
+        chunksFor2D(center, requestedRadius);
+    const bool ready = world.prepareChunks(visibleChunks);
+    if (!vision.initialized) {
+      static_cast<void>(
+          world.prepareChunks(chunksFor2D(center, terrainRenderDistance2D)));
+    }
+    if (ready) {
       if (vision.worldRevision != world.revision()) {
         vision.chunkEdges.clear();
       }
@@ -1368,10 +1443,10 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
       }
       vision.chunkEdges = std::move(retained);
       vision.edges.clear();
-      const int minimumX = center.x - terrainRenderDistance2D;
-      const int maximumX = center.x + terrainRenderDistance2D;
-      const int minimumY = center.y - terrainRenderDistance2D;
-      const int maximumY = center.y + terrainRenderDistance2D;
+      const int minimumX = center.x - requestedRadius;
+      const int maximumX = center.x + requestedRadius;
+      const int minimumY = center.y - requestedRadius;
+      const int maximumY = center.y + requestedRadius;
       for (const auto &[chunk, edges] : vision.chunkEdges) {
         static_cast<void>(chunk);
         for (const VisibleEdge2D &edge : edges) {
@@ -1382,8 +1457,13 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
         }
       }
       vision.center = center;
+      vision.radius = requestedRadius;
       vision.worldRevision = world.revision();
       vision.initialized = true;
+      reportStartupStage("2D", requestedRadius, terrainRenderDistance2D,
+                         world.loadedChunkCount(), vision.startupCounter,
+                         vision.initialStartupReported,
+                         vision.fullStartupReported);
     }
   }
   const auto target = raycast(world, camera.position, camera.forward(), 8.0);
@@ -1399,15 +1479,14 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
       const VisionSample2D &next =
           samples[static_cast<std::size_t>(height - 1 - runEnd)];
       if (next.solid != sample.solid || next.worldAxis != sample.worldAxis ||
-          next.block != sample.block || next.targeted != sample.targeted) {
+          next.block != sample.block || next.targeted != sample.targeted ||
+          next.displayColor != sample.displayColor) {
         break;
       }
       ++runEnd;
     }
     if (sample.solid) {
-      const std::array<std::uint8_t, 3> color =
-          sample.targeted ? std::array<std::uint8_t, 3>{255, 255, 255}
-                          : visionBlockColor2D(sample.material, sample.block);
+      const std::array<std::uint8_t, 3> color = sample.displayColor;
       SDL_SetRenderDrawColor(renderer, color[0], color[1], color[2], 255);
       const SDL_Rect rectangle{stripLeft, runStart, stripWidth,
                                runEnd - runStart};
@@ -1416,6 +1495,9 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
     runStart = runEnd;
   }
 
+  drawFluidImmersion(renderer, world.blockAt(containingBlock(camera.position)),
+                     width, height);
+
   SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
   SDL_RenderDrawLine(renderer, stripLeft, height / 2,
                      stripLeft + stripWidth - 1, height / 2);
@@ -1423,7 +1505,11 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
 }
 
 struct VisionGeometry3D {
+  std::uint64_t startupCounter{SDL_GetPerformanceCounter()};
+  bool initialStartupReported{};
+  bool fullStartupReported{};
   BlockCoord3D center{};
+  int radius{-1};
   std::uint64_t worldRevision{std::numeric_limits<std::uint64_t>::max()};
   bool geometryInitialized{};
   std::unordered_map<ChunkCoord, std::vector<VisibleFace3D>, ChunkCoordHash>
@@ -1535,11 +1621,20 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
             const Camera3D &camera, int width, int height,
             VisionGeometry3D &vision) {
   const BlockCoord3D center = containingBlock(camera.position);
+  constexpr int initialRadius = 3;
   if (!vision.geometryInitialized || vision.center != center ||
-      vision.worldRevision != world.revision()) {
+      vision.worldRevision != world.revision() ||
+      vision.radius < renderBlockRadius3D) {
+    const int requestedRadius =
+        vision.geometryInitialized ? renderBlockRadius3D : initialRadius;
     const std::vector<ChunkCoord> visibleChunks =
-        chunksFor3D(center, renderBlockRadius3D);
-    if (world.prepareChunks(visibleChunks)) {
+        chunksFor3D(center, requestedRadius);
+    const bool ready = world.prepareChunks(visibleChunks);
+    if (!vision.geometryInitialized) {
+      static_cast<void>(
+          world.prepareChunks(chunksFor3D(center, renderBlockRadius3D)));
+    }
+    if (ready) {
       if (vision.worldRevision != world.revision()) {
         vision.chunkFaces.clear();
       }
@@ -1566,12 +1661,12 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
       }
       vision.chunkFaces = std::move(retained);
       vision.faces.clear();
-      const BlockCoord3D minimum{center.x - renderBlockRadius3D,
-                                 center.y - renderBlockRadius3D,
-                                 center.z - renderBlockRadius3D};
-      const BlockCoord3D maximum{center.x + renderBlockRadius3D,
-                                 center.y + renderBlockRadius3D,
-                                 center.z + renderBlockRadius3D};
+      const BlockCoord3D minimum{center.x - requestedRadius,
+                                 center.y - requestedRadius,
+                                 center.z - requestedRadius};
+      const BlockCoord3D maximum{center.x + requestedRadius,
+                                 center.y + requestedRadius,
+                                 center.z + requestedRadius};
       for (const auto &[chunk, faces] : vision.chunkFaces) {
         static_cast<void>(chunk);
         for (const VisibleFace3D &face : faces) {
@@ -1583,8 +1678,13 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
         }
       }
       vision.center = center;
+      vision.radius = requestedRadius;
       vision.worldRevision = world.revision();
       vision.geometryInitialized = true;
+      reportStartupStage("3D", requestedRadius, renderBlockRadius3D,
+                         world.loadedChunkCount(), vision.startupCounter,
+                         vision.initialStartupReported,
+                         vision.fullStartupReported);
     }
   }
   SDL_SetRenderDrawColor(renderer, skyColor.red, skyColor.green, skyColor.blue,
@@ -1608,7 +1708,8 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
       SDL_Vertex vertex{};
       vertex.position.x = static_cast<float>((point.x + 1.0) * 0.5 * width);
       vertex.position.y = static_cast<float>((1.0 - point.y) * 0.5 * height);
-      vertex.color = SDL_Color{color[0], color[1], color[2], 255};
+      vertex.color =
+          SDL_Color{color[0], color[1], color[2], blockOpacity(face.material)};
       vertices.push_back(vertex);
     }
     for (std::size_t corner = 1; corner + 1 < face.vertexCount; ++corner) {
@@ -1617,12 +1718,20 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
       indices.push_back(firstVertex + static_cast<int>(corner + 1));
     }
   }
-  if (!vertices.empty() &&
-      SDL_RenderGeometry(renderer, nullptr, vertices.data(),
-                         static_cast<int>(vertices.size()), indices.data(),
-                         static_cast<int>(indices.size())) != 0) {
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  const int geometryResult =
+      vertices.empty() ? 0
+                       : SDL_RenderGeometry(renderer, nullptr, vertices.data(),
+                                            static_cast<int>(vertices.size()),
+                                            indices.data(),
+                                            static_cast<int>(indices.size()));
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+  if (geometryResult != 0) {
     return false;
   }
+
+  drawFluidImmersion(renderer, world.blockAt(containingBlock(camera.position)),
+                     width, height);
 
   if (const auto hit = raycast(world, camera.position, camera.forward(), 8.0)) {
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
@@ -1661,7 +1770,7 @@ bool saveRendererBitmap(SDL_Renderer *renderer, int width, int height,
 
 int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
                                TerrainMode terrainMode, bool smokeTest,
-                               bool inventorySmoke,
+                               bool inventorySmoke, bool fluidSmoke,
                                const std::string &smokeOutput) {
   const std::string worldName = terrainModeName(terrainMode);
   SDL_SetWindowTitle(window, ("Proj4D | 3D " + worldName +
@@ -1690,6 +1799,14 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
   };
   camera.position = spawnPosition;
   camera.turnVertical(-0.28);
+  if (fluidSmoke) {
+    for (int x = 2; x <= 5; ++x) {
+      for (int z = -2; z <= 2; ++z) {
+        static_cast<void>(
+            world.setBlock({x, 1, z}, z <= 0 ? BlockId::water : BlockId::lava));
+      }
+    }
+  }
   PlayerMotionState3D playerMotion{0.0, true, spawnPosition};
   VisionGeometry3D vision;
   InventoryUiState inventoryUi;
@@ -1717,8 +1834,8 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
               << "  W/S: move forward/backward\n"
               << "  A/D: move left/right\n"
               << "  Mouse: look around\n"
-              << "  Space: jump 1.5 blocks\n"
-              << "  Hold Shift: sneak and avoid walking off edges\n"
+              << "  Space: jump 1.5 blocks or swim upward\n"
+              << "  Hold Shift: sneak on land or swim downward\n"
               << "  Left click: break a targeted cube\n"
               << "  Right click: build a cube\n"
               << "  Escape: quit\n";
@@ -1860,10 +1977,12 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
                                 " | WASD move | Mouse look | Shift sneak";
       SDL_SetWindowTitle(window, title.c_str());
     }
-    if (smokeTest && !vision.geometryInitialized) {
+    if (smokeTest &&
+        (!vision.geometryInitialized || vision.radius < renderBlockRadius3D)) {
       SDL_Delay(1U);
     }
-    if (smokeTest && frameCount >= 3 && vision.geometryInitialized) {
+    if (smokeTest && frameCount >= 3 && vision.geometryInitialized &&
+        vision.radius == renderBlockRadius3D) {
       if (!saveRendererBitmap(renderer, width, height, smokeOutput)) {
         std::cerr << "Could not save 3D smoke image: " << SDL_GetError()
                   << '\n';
@@ -1879,7 +1998,7 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
 
 int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
                              TerrainMode terrainMode, bool smokeTest,
-                             bool inventorySmoke,
+                             bool inventorySmoke, bool fluidSmoke,
                              const std::string &smokeOutput) {
   const std::string worldName = terrainModeName(terrainMode);
   SDL_SetWindowTitle(window,
@@ -1908,6 +2027,12 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
   };
   camera.position = spawnPosition;
   camera.turnVertical(-0.28);
+  if (fluidSmoke) {
+    for (int x = 2; x <= 5; ++x) {
+      static_cast<void>(
+          world.setBlock({x, 1}, x <= 3 ? BlockId::water : BlockId::lava));
+    }
+  }
   PlayerMotionState2D playerMotion{0.0, true, spawnPosition};
   VisionGeometry2D vision;
   InventoryUiState inventoryUi;
@@ -1934,8 +2059,8 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
               << "  W/S: move forward/backward in 2D\n"
               << "  Mouse up/down: look up/down\n"
               << "  Z: reverse the horizontal viewing direction\n"
-              << "  Space: jump 1.5 blocks\n"
-              << "  Hold Shift: sneak and avoid walking off edges\n"
+              << "  Space: jump 1.5 blocks or swim upward\n"
+              << "  Hold Shift: sneak on land or swim downward\n"
               << "  Left click: break a targeted square\n"
               << "  Right click: build a square\n"
               << "  Escape: quit\n";
@@ -2071,10 +2196,12 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
           " | W/S move | Mouse: vertical | Z: reverse | Shift: sneak";
       SDL_SetWindowTitle(window, title.c_str());
     }
-    if (smokeTest && !vision.initialized) {
+    if (smokeTest &&
+        (!vision.initialized || vision.radius < terrainRenderDistance2D)) {
       SDL_Delay(1U);
     }
-    if (smokeTest && frameCount >= 3 && vision.initialized) {
+    if (smokeTest && frameCount >= 3 && vision.initialized &&
+        vision.radius == terrainRenderDistance2D) {
       if (!saveRendererBitmap(renderer, width, height, smokeOutput)) {
         std::cerr << "Could not save 2D smoke image: " << SDL_GetError()
                   << '\n';
@@ -2148,13 +2275,15 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                                    mode == RunMode::TwoDFlatSmokeTest ||
                                    mode == RunMode::TwoDLowSmokeTest ||
                                    mode == RunMode::TwoDHighSmokeTest ||
-                                   mode == RunMode::TwoDInventorySmokeTest;
+                                   mode == RunMode::TwoDInventorySmokeTest ||
+                                   mode == RunMode::TwoDFluidSmokeTest;
   const bool threeDimensionalSmoke =
       mode == RunMode::ThreeDTerrainMenuSmokeTest ||
       mode == RunMode::ThreeDFlatSmokeTest ||
       mode == RunMode::ThreeDLowSmokeTest ||
       mode == RunMode::ThreeDHighSmokeTest ||
-      mode == RunMode::ThreeDInventorySmokeTest;
+      mode == RunMode::ThreeDInventorySmokeTest ||
+      mode == RunMode::ThreeDFluidSmokeTest;
   std::optional<WorldDimension> selectedDimension;
   if (mode == RunMode::Interactive) {
     selectedDimension = chooseWorldDimension(renderer);
@@ -2214,7 +2343,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   if (*selectedDimension == WorldDimension::Two) {
     const int result = runTwoDimensionalSession(
         renderer, window, *selectedTerrain, smokeTest,
-        mode == RunMode::TwoDInventorySmokeTest, smokeOutput);
+        mode == RunMode::TwoDInventorySmokeTest,
+        mode == RunMode::TwoDFluidSmokeTest, smokeOutput);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
@@ -2224,7 +2354,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   if (*selectedDimension == WorldDimension::Three) {
     const int result = runThreeDimensionalSession(
         renderer, window, *selectedTerrain, smokeTest,
-        mode == RunMode::ThreeDInventorySmokeTest, smokeOutput);
+        mode == RunMode::ThreeDInventorySmokeTest,
+        mode == RunMode::ThreeDFluidSmokeTest, smokeOutput);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
@@ -2262,6 +2393,16 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   };
   camera.position = spawnPosition;
   camera.turnVertical(-0.28);
+  if (mode == RunMode::FourDFluidSmokeTest) {
+    for (int z = 2; z <= 5; ++z) {
+      for (int x = -2; x <= 2; ++x) {
+        for (int w = -2; w <= 2; ++w) {
+          static_cast<void>(world.setBlock(
+              {x, 1, z, w}, x <= 0 ? BlockId::water : BlockId::lava));
+        }
+      }
+    }
+  }
   DisplayCamera display;
   FeatureGeometryCache geometryCache;
   InventoryUiState inventoryUi;
@@ -2290,8 +2431,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
               << "  W/S: move forward/backward in 4D\n"
               << "  A/D: move along the first sideways direction\n"
               << "  Q/E: move along the second sideways direction\n"
-              << "  Space: jump 1.5 blocks\n"
-              << "  Hold Shift: sneak and avoid walking off edges\n"
+              << "  Space: jump 1.5 blocks or swim upward\n"
+              << "  Hold Shift: sneak on land or swim downward\n"
               << "  Up/Down: look up/down (limited to straight up/down)\n"
               << "  Mouse left/right: ordinary horizontal look\n"
               << "  Mouse up/down: fourth-dimensional look\n"
@@ -2460,10 +2601,12 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                                 "Ctrl: orbit";
       SDL_SetWindowTitle(window, title.c_str());
     }
-    if (smokeTest && !geometryCache.initialized) {
+    if (smokeTest && (!geometryCache.initialized ||
+                      geometryCache.radius < renderBlockRadius)) {
       SDL_Delay(1U);
     }
-    if (smokeTest && frameCount >= 3 && geometryCache.initialized) {
+    if (smokeTest && frameCount >= 3 && geometryCache.initialized &&
+        geometryCache.radius == renderBlockRadius) {
       if (!saveRendererBitmap(renderer, width, height, smokeOutput)) {
         std::cerr << "Could not save smoke image: " << SDL_GetError() << '\n';
         frameCount = -1;

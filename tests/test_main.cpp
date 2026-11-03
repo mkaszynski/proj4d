@@ -906,6 +906,24 @@ void testThreeDimensionalProjectionAndVisibleFaces() {
   expect(
       std::ranges::any_of(afterNeighbor, isPositiveBoundary),
       "a rebuilt face cache exposes a boundary after its air neighbor loads");
+
+  proj4d::BlockWorld fluidBacking(proj4d::TerrainMode::Flat, 4303U);
+  static_cast<void>(
+      fluidBacking.setBlock({0, 100, 0, 0}, proj4d::BlockId::water));
+  static_cast<void>(
+      fluidBacking.setBlock({1, 100, 0, 0}, proj4d::BlockId::water));
+  proj4d::BlockWorld3D fluidWorld(fluidBacking);
+  const auto fluidFaces =
+      proj4d::buildVisibleFaces3D(fluidWorld, {0, 100, 0}, 1);
+  expect(std::ranges::count(fluidFaces, proj4d::BlockId::water,
+                            &proj4d::VisibleFace3D::material) == 10,
+         "adjacent water cubes render one translucent outer shell without an "
+         "internal face");
+  proj4d::Camera3D submergedCamera;
+  submergedCamera.position = {0.5, 100.5, 0.5};
+  expect(
+      !proj4d::projectVisibleFaces3D(fluidFaces, submergedCamera, 1.0).empty(),
+      "fluid surfaces remain visible from inside the liquid");
 }
 
 void testBackgroundChunkStreamingAndLoadedQueries() {
@@ -987,6 +1005,14 @@ void testFastSolidLookupMatchesHypercraft() {
     exact = exact && proj4d::isSolid(block) == hypercraft::is_solid(block);
   }
   expect(exact, "the constant-time solid table matches every Hypercraft block");
+  expect(proj4d::isFluid(proj4d::BlockId::water) &&
+             proj4d::isFluid(proj4d::BlockId::lava) &&
+             !proj4d::isFluid(proj4d::BlockId::stone),
+         "water and lava are the only fluid block volumes");
+  expect(proj4d::blockOpacity(proj4d::BlockId::water) < 255U &&
+             proj4d::blockOpacity(proj4d::BlockId::lava) < 255U &&
+             proj4d::blockOpacity(proj4d::BlockId::stone) == 255U,
+         "fluids are translucent while ordinary terrain remains opaque");
 }
 
 void testThreeDimensionalPhysicsAndInteraction() {
@@ -1166,6 +1192,36 @@ void testTrueTwoDimensionalProjection() {
   expect(
       std::ranges::any_of(afterNeighbor, isPositiveBoundary),
       "a rebuilt chunk cache exposes a boundary after its air neighbor loads");
+
+  proj4d::BlockWorld fluidBacking(proj4d::TerrainMode::Flat, 4103U);
+  static_cast<void>(
+      fluidBacking.setBlock({0, 100, 0, 0}, proj4d::BlockId::water));
+  static_cast<void>(
+      fluidBacking.setBlock({1, 100, 0, 0}, proj4d::BlockId::water));
+  static_cast<void>(fluidBacking.blockAt({-1, 100, 0, 0}));
+  proj4d::BlockWorld2D fluidWorld(fluidBacking);
+  const auto fluidEdges =
+      proj4d::buildVisibleEdges2DChunk(fluidWorld, {0, 6, 0, 0});
+  expect(std::ranges::count(fluidEdges, proj4d::BlockId::water,
+                            &proj4d::VisibleEdge2D::material) == 6,
+         "adjacent water squares render one translucent perimeter without an "
+         "internal edge");
+
+  const std::array transparentLayers{
+      proj4d::VisibleEdge2D{
+          {0, 100}, 1, {0.0, 100.0}, {0.0, 101.0}, proj4d::BlockId::water},
+      proj4d::VisibleEdge2D{
+          {2, 100}, 1, {2.0, 100.0}, {2.0, 101.0}, proj4d::BlockId::stone},
+  };
+  const auto transparentRaster = proj4d::rasterizeVisionEdges2D(
+      transparentLayers, sideCamera, 101, proj4d::BlockCoord2D{2, 100});
+  const auto waterColor =
+      proj4d::visionBlockColor2D(proj4d::BlockId::water, {0, 100});
+  expect(transparentRaster[50].material == proj4d::BlockId::water &&
+             transparentRaster[50].displayColor != waterColor &&
+             transparentRaster[50].displayColor !=
+                 std::array<std::uint8_t, 3>{255, 255, 255},
+         "2D water blends over and still reveals a targeted solid behind it");
 }
 
 void testTwoDimensionalPhysicsAndInteraction() {
@@ -1243,6 +1299,71 @@ void testTwoDimensionalPhysicsAndInteraction() {
          "2D right click can build beside the target");
   expect(proj4d::breakAlongRay(interactionWorld, origin, right, 8.0),
          "2D left click can break the nearest target");
+}
+
+void testFluidSwimmingAcrossDimensions() {
+  proj4d::BlockWorld renderWorld(proj4d::TerrainMode::Flat, 0xF10D5U);
+  static_cast<void>(
+      renderWorld.setBlock({0, 100, 0, 0}, proj4d::BlockId::water));
+  const auto fluidCells =
+      proj4d::buildVisibleBoundaryCells(renderWorld, {0, 100, 0, 0}, 0);
+  expect(fluidCells.size() == 8U &&
+             std::ranges::all_of(fluidCells,
+                                 [](const auto &cell) {
+                                   return cell.material ==
+                                          proj4d::BlockId::water;
+                                 }),
+         "an isolated 4D water tesseract contributes eight translucent cubic "
+         "boundary volumes");
+
+  proj4d::BlockWorld backing(proj4d::TerrainMode::Flat, 0x5A17U);
+  for (int y = 96; y <= 106; ++y) {
+    static_cast<void>(backing.setBlock({0, y, 0, 0}, proj4d::BlockId::water));
+    static_cast<void>(backing.setBlock({2, y, 0, 0}, proj4d::BlockId::lava));
+  }
+
+  proj4d::Camera4D camera4D;
+  camera4D.position = {0.5, 100.5, 0.5, 0.5};
+  proj4d::PlayerMotionState motion4D{0.0, false, camera4D.position};
+  expect(proj4d::playerIntersectsFluid(backing, camera4D.position) &&
+             !proj4d::playerCollidesAt(backing, camera4D.position),
+         "4D water is traversable and detected across the player body");
+  const double neutralStart = camera4D.position.y;
+  proj4d::updatePlayerMotion(camera4D, backing, motion4D, {}, false, 0.05);
+  expect(motion4D.swimming && camera4D.position.y < neutralStart &&
+             camera4D.position.y > neutralStart - 0.05,
+         "an idle 4D swimmer sinks gently instead of falling at full gravity");
+
+  camera4D.position = {0.5, 100.5, 0.5, 0.5};
+  motion4D = {0.0, false, camera4D.position};
+  proj4d::updatePlayerMotion(camera4D, backing, motion4D, {}, true, 0.05);
+  expect(camera4D.position.y > 100.5 && motion4D.verticalVelocity > 0.0,
+         "holding Space swims upward in 4D fluid");
+
+  camera4D.position = {0.5, 100.5, 0.5, 0.5};
+  motion4D = {0.0, false, camera4D.position};
+  proj4d::updatePlayerMotion(camera4D, backing, motion4D, {0.0, 0.0, 0.0, true},
+                             false, 0.05);
+  expect(camera4D.position.y < 100.5 && motion4D.swimming && !motion4D.sneaking,
+         "holding Shift swims downward instead of crouching in fluid");
+
+  proj4d::BlockWorld3D world3D(backing);
+  proj4d::Camera3D camera3D;
+  camera3D.position = {0.5, 100.5, 0.5};
+  proj4d::PlayerMotionState3D motion3D{0.0, false, camera3D.position};
+  proj4d::updatePlayerMotion(camera3D, world3D, motion3D, {}, true, 0.05);
+  expect(motion3D.swimming && camera3D.position.y > 100.5,
+         "3D uses the same upward swimming behavior as 4D");
+
+  proj4d::BlockWorld2D world2D(backing);
+  proj4d::Camera2D camera2D;
+  camera2D.position = {2.5, 100.5};
+  proj4d::PlayerMotionState2D motion2D{0.0, false, camera2D.position};
+  proj4d::updatePlayerMotion(camera2D, world2D, motion2D, {}, true, 0.05);
+  expect(motion2D.swimming && camera2D.position.y > 100.5 &&
+             !proj4d::playerCollidesAt(world2D, {2.5, 100.5}),
+         "2D lava is transparent, traversable fluid with the same swimming "
+         "physics");
 }
 
 void testFlatTerrainAndPreservedDensityFunctions() {
@@ -1561,14 +1682,39 @@ void testAveragedFourDimensionalVolumeColor() {
       proj4d::renderAveragedVolume4D(volumes, camera, 41, 41, 41);
   const proj4d::BlockColor lavaColor =
       proj4d::blockColor(proj4d::BlockId::lava);
+  const int lavaOpacity = proj4d::blockOpacity(proj4d::BlockId::lava);
+  const auto expectedMixedChannel = [&](int grassChannel, int lavaChannel) {
+    return (grassChannel * 255 + lavaChannel * lavaOpacity +
+            (255 + lavaOpacity) / 2) /
+           (255 + lavaOpacity);
+  };
   expect(std::abs(static_cast<int>(mixed.rgba[center]) -
-                  (static_cast<int>(grassColor.red) + lavaColor.red) / 2) <=
-                 1 &&
-             std::abs(static_cast<int>(mixed.rgba[center + 1]) -
-                      (static_cast<int>(grassColor.green) + lavaColor.green) /
-                          2) <= 1,
-         "equal occupied path lengths produce their exact order-independent "
-         "average");
+                  expectedMixedChannel(grassColor.red, lavaColor.red)) <= 1 &&
+             std::abs(
+                 static_cast<int>(mixed.rgba[center + 1]) -
+                 expectedMixedChannel(grassColor.green, lavaColor.green)) <= 1,
+         "4D occupied-path averaging weights translucent lava without hiding "
+         "the opaque material behind it");
+  const std::array reversedVolumes{second, first};
+  const auto reversedMixed =
+      proj4d::renderAveragedVolume4D(reversedVolumes, camera, 41, 41, 41);
+  expect(reversedMixed.rgba == mixed.rgba,
+         "transparent 4D volume compositing remains order independent");
+
+  proj4d::ProjectedBoundaryVolume4D water = first;
+  water.material = proj4d::BlockId::water;
+  const std::array waterVolume{water};
+  const auto transparentWater =
+      proj4d::renderAveragedVolume4D(waterVolume, camera, 41, 41, 41);
+  const proj4d::BlockColor waterColor =
+      proj4d::blockColor(proj4d::BlockId::water);
+  expect(transparentWater.rgba[center] > waterColor.red &&
+             transparentWater.rgba[center] < proj4d::skyColor.red &&
+             transparentWater.rgba[center + 2] >
+                 std::min(waterColor.blue, proj4d::skyColor.blue) &&
+             transparentWater.rgba[center + 2] <
+                 std::max(waterColor.blue, proj4d::skyColor.blue),
+         "a water volume transparently mixes its color with in-cube sky");
   expect(mixed.width == 41 && mixed.height == 41,
          "the analytical volume compositor honors its bounded internal "
          "resolution");
@@ -1583,6 +1729,11 @@ void testAveragedFourDimensionalVolumeColor() {
              empty.rgba[center + 2] == proj4d::skyColor.blue,
          "degenerate projected cells are rejected instead of creating "
          "strange full-cube edges");
+  const auto immersed = proj4d::renderAveragedVolume4D(
+      degenerateVolume, camera, 41, 41, 41, proj4d::BlockId::water);
+  expect(immersed.rgba[center] != empty.rgba[center] &&
+             immersed.rgba[center + 1] != empty.rgba[center + 1],
+         "being inside 4D water adds a bounded translucent immersion tint");
   const auto emptyZoomedOut = proj4d::renderAveragedVolume4D(
       degenerateVolume, {0.0, 0.0, 6.5}, 41, 41, 41);
   bool foundOutsideBlack = false;
@@ -1861,6 +2012,7 @@ int main() {
     testThreeDimensionalPhysicsAndInteraction();
     testTrueTwoDimensionalProjection();
     testTwoDimensionalPhysicsAndInteraction();
+    testFluidSwimmingAcrossDimensions();
     testFlatTerrainAndPreservedDensityFunctions();
     testLowTerrainMatchesHypercraftFlat();
     testBlockWorldUsesTheSelectedTerrainMode();

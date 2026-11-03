@@ -41,6 +41,12 @@ int main(int argc, char **argv) {
       mode = proj4d::RunMode::ThreeDInventorySmokeTest;
     } else if (argument == "--2d-inventory-smoke-test") {
       mode = proj4d::RunMode::TwoDInventorySmokeTest;
+    } else if (argument == "--4d-fluid-smoke-test") {
+      mode = proj4d::RunMode::FourDFluidSmokeTest;
+    } else if (argument == "--3d-fluid-smoke-test") {
+      mode = proj4d::RunMode::ThreeDFluidSmokeTest;
+    } else if (argument == "--2d-fluid-smoke-test") {
+      mode = proj4d::RunMode::TwoDFluidSmokeTest;
     } else if (argument == "--smoke-output" && index + 1 < argc) {
       smokeOutput = argv[++index];
     } else if (argument == "--help") {
@@ -55,7 +61,9 @@ int main(int argc, char **argv) {
                    "--2d-terrain-menu-smoke-test | "
                    "--4d-inventory-smoke-test | "
                    "--3d-inventory-smoke-test | "
-                   "--2d-inventory-smoke-test]\n"
+                   "--2d-inventory-smoke-test | "
+                   "--4d-fluid-smoke-test | --3d-fluid-smoke-test | "
+                   "--2d-fluid-smoke-test]\n"
                 << "              [--smoke-output FILE]\n"
                 << "Alias: --normal-smoke-test selects 4D High terrain.\n";
       return 0;
