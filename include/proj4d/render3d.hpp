@@ -62,6 +62,8 @@ buildVisionImage3D(const BlockWorld3D &world, const Camera3D &camera, int width,
 [[nodiscard]] std::vector<VisibleFace3D>
 buildVisibleFaces3D(const BlockWorld3D &world, const BlockCoord3D &center,
                     int radius = renderBlockRadius3D);
+[[nodiscard]] std::vector<VisibleFace3D>
+buildVisibleFaces3DChunk(const BlockWorld3D &world, const ChunkCoord &chunk);
 [[nodiscard]] std::vector<VisionSample3D>
 rasterizeVisionFaces3D(const std::vector<VisibleFace3D> &faces,
                        const Camera3D &camera, int width, int height);

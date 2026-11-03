@@ -39,8 +39,9 @@ platformer or an overhead view:
 The vision line spans the screen vertically and is drawn as a centered strip
 whose width is one tenth of its height. This makes projected block edges
 readable as rectangular intervals without widening the line to half of the
-display. Only the nearest solid edge along each sight ray is shown, so terrain
-cannot be seen through other blocks. In the reversed 2D palette, green
+display. Exposed square boundaries are cached per chunk, projected into 1D
+intervals, and depth-rasterized so only the nearest solid edge is shown;
+terrain cannot be seen through other blocks. In the reversed 2D palette, green
 intervals use their material color. Every block receives a stable,
 coordinate-derived lighter or darker shade so neighboring projected blocks
 remain visible without flickering as the camera moves.
@@ -84,18 +85,20 @@ eight ±X/±Y/±Z/±W cubic boundary directions has a fixed
 brightness: upward faces are brightest, downward faces darkest, and side
 directions retain distinct shading without changing the block's material hue.
 
-Before extracting 4D geometry, missing chunks in the bounded render region are
-generated concurrently and inserted into the world's normal LRU cache on the
-main thread. Generation remains deterministic and exact; this only shortens the
-initial Low/High load and never turns rendering into unbounded background work.
+Missing chunks in a bounded render region are queued on a persistent four-worker
+streamer and inserted into the world's normal LRU cache on the main thread.
+Frames never wait for generation and retain the last complete geometry until a
+new visible set is ready. Generation remains deterministic and exact; missing
+data is treated as opaque rather than air.
 
 Occlusion is resolved along short intervals of each projected feature edge,
-using exact 4D grid traversal toward the corresponding source points. Adjacent
-visible intervals are merged before drawing. A block can therefore hide part
-of an edge without incorrectly erasing the rest, and an edge whose midpoint is
-clear cannot show a blocked end through nearer terrain. Sampling scales with
-projected length and has a fixed per-edge cap to preserve frame time. The white
-selection wireframe uses the same visibility path.
+using exact 4D traversal through a dense bounded occupancy grid toward the
+corresponding source points. The grid reuses overlap when the camera crosses a
+block, and source-world wireframe visibility is cached until the world camera
+or topology changes. Adjacent visible intervals are merged before drawing. A
+block can therefore hide part of an edge without incorrectly erasing the rest,
+and external orbit of the 3D vision cube does not rerun 4D occlusion. Sampling
+has a fixed per-edge cap. The white selection wireframe uses the same path.
 
 ## Build and run
 
@@ -284,10 +287,10 @@ sneaking.
   horizontal direction.
 - Dimension-specific motion and exact grid traversal use shared authoritative
   physics constants while preserving real 4D, 3D, and 2D collision geometry.
-- Analytical 4D occupied-path compositing and sightline-culling wireframes,
-  standard 3D exposed-face meshing with batched
-  depth-ordered triangles, and 2D nearest-hit sampling prevent hidden cavities
-  and rear blocks from appearing through solid terrain.
+- Analytical 4D occupied-path compositing over dense cached occupancy,
+  visibility-cached wireframes, per-chunk 3D exposed-face meshes with batched
+  depth-ordered triangles, and per-chunk 2D boundary interval rasterization
+  prevent hidden cavities and rear blocks from appearing through solid terrain.
 - The SDL layer owns platform input, menus, final display projection, and
   drawing; simulation and projection truth stay in portable C++.
 - Tests cover all three projections, shared 4D chunk ownership,

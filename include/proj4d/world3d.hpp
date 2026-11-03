@@ -32,6 +32,8 @@ public:
   explicit BlockWorld3D(BlockWorld &world);
 
   [[nodiscard]] BlockId blockAt(const BlockCoord3D &coordinate) const;
+  [[nodiscard]] std::optional<BlockId>
+  loadedBlockAt(const BlockCoord3D &coordinate) const;
   [[nodiscard]] bool isSolid(const BlockCoord3D &coordinate) const;
   [[nodiscard]] bool generatedSolidAt(const BlockCoord3D &coordinate) const;
   [[nodiscard]] bool setBlock(const BlockCoord3D &coordinate, BlockId block);
@@ -42,6 +44,7 @@ public:
   [[nodiscard]] std::size_t loadedChunkCount() const;
   [[nodiscard]] std::size_t maximumLoadedChunks() const;
   [[nodiscard]] std::uint64_t revision() const;
+  [[nodiscard]] bool prepareChunks(std::span<const ChunkCoord> chunks) const;
 
 private:
   BlockWorld &world_;

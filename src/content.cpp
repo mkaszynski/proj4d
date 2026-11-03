@@ -8,13 +8,35 @@ namespace proj4d {
 
 namespace {
 
+constexpr std::array<bool, 256> solidBlocks = [] {
+  std::array<bool, 256> result{};
+  for (const BlockId block :
+       {BlockId::grass,          BlockId::dirt,
+        BlockId::stone,          BlockId::wood,
+        BlockId::leaves,         BlockId::crafting_table,
+        BlockId::planks,         BlockId::tin_ore,
+        BlockId::copper_ore,     BlockId::iron_ore,
+        BlockId::coal_ore,       BlockId::chest,
+        BlockId::furnace,        BlockId::sand,
+        BlockId::snow,           BlockId::ice,
+        BlockId::glass,          BlockId::pine_wood,
+        BlockId::jungle_wood,    BlockId::pine_planks,
+        BlockId::jungle_planks,  BlockId::orange_grass,
+        BlockId::windswept_wood, BlockId::windswept_planks}) {
+    result[static_cast<std::uint8_t>(block)] = true;
+  }
+  return result;
+}();
+
 const hypercraft::ContentDefinition &definition(BlockId block) {
   return hypercraft::ContentRegistry::default_registry().definition(block);
 }
 
 } // namespace
 
-bool isSolid(BlockId block) { return definition(block).solid; }
+bool isSolid(BlockId block) {
+  return solidBlocks[static_cast<std::uint8_t>(block)];
+}
 
 bool isKnownBlock(BlockId block) {
   return hypercraft::ContentRegistry::default_registry().has_definition(block);

@@ -48,6 +48,60 @@ std::vector<VisionSample3D> buildVisionImage3D(const BlockWorld3D &world,
       camera, width, height);
 }
 
+namespace {
+
+void appendVisibleBlockFaces(const BlockWorld3D &world,
+                             const BlockCoord3D &block,
+                             std::vector<VisibleFace3D> &faces,
+                             bool generateMissingNeighbors = true) {
+  if (!world.isSolid(block)) {
+    return;
+  }
+  const BlockId material = world.blockAt(block);
+  for (int axis = 0; axis < 3; ++axis) {
+    for (const int direction : {-1, 1}) {
+      BlockCoord3D neighbor = block;
+      neighbor[static_cast<std::size_t>(axis)] += direction;
+      const std::optional<BlockId> loadedNeighbor =
+          generateMissingNeighbors ? std::optional(world.blockAt(neighbor))
+                                   : world.loadedBlockAt(neighbor);
+      // Cached chunk geometry cannot stall a frame to generate an unseen
+      // neighbor. Missing data is conservatively opaque; the cache is
+      // rebuilt when the visible chunk set changes.
+      if (!loadedNeighbor || isSolid(*loadedNeighbor)) {
+        continue;
+      }
+      std::array<int, 2> tangentAxes{};
+      int tangentIndex = 0;
+      for (int candidate = 0; candidate < 3; ++candidate) {
+        if (candidate != axis) {
+          tangentAxes[static_cast<std::size_t>(tangentIndex++)] = candidate;
+        }
+      }
+      std::array<Vec3, 4> corners{};
+      constexpr std::array<std::array<int, 2>, 4> cornerOffsets{{
+          {0, 0},
+          {1, 0},
+          {1, 1},
+          {0, 1},
+      }};
+      for (std::size_t corner = 0; corner < corners.size(); ++corner) {
+        Vec3 point{static_cast<double>(block.x), static_cast<double>(block.y),
+                   static_cast<double>(block.z)};
+        point[static_cast<std::size_t>(axis)] += direction > 0 ? 1.0 : 0.0;
+        point[static_cast<std::size_t>(tangentAxes[0])] +=
+            cornerOffsets[corner][0];
+        point[static_cast<std::size_t>(tangentAxes[1])] +=
+            cornerOffsets[corner][1];
+        corners[corner] = point;
+      }
+      faces.push_back({block, axis, direction, corners, material});
+    }
+  }
+}
+
+} // namespace
+
 std::vector<VisibleFace3D> buildVisibleFaces3D(const BlockWorld3D &world,
                                                const BlockCoord3D &center,
                                                int radius) {
@@ -57,46 +111,24 @@ std::vector<VisibleFace3D> buildVisibleFaces3D(const BlockWorld3D &world,
     for (int y = center.y - radius; y <= center.y + radius; ++y) {
       for (int x = center.x - radius; x <= center.x + radius; ++x) {
         const BlockCoord3D block{x, y, z};
-        if (!world.isSolid(block)) {
-          continue;
-        }
-        for (int axis = 0; axis < 3; ++axis) {
-          for (const int direction : {-1, 1}) {
-            BlockCoord3D neighbor = block;
-            neighbor[static_cast<std::size_t>(axis)] += direction;
-            if (world.isSolid(neighbor)) {
-              continue;
-            }
-            std::array<int, 2> tangentAxes{};
-            int tangentIndex = 0;
-            for (int candidate = 0; candidate < 3; ++candidate) {
-              if (candidate != axis) {
-                tangentAxes[static_cast<std::size_t>(tangentIndex++)] =
-                    candidate;
-              }
-            }
-            std::array<Vec3, 4> corners{};
-            constexpr std::array<std::array<int, 2>, 4> cornerOffsets{{
-                {0, 0},
-                {1, 0},
-                {1, 1},
-                {0, 1},
-            }};
-            for (std::size_t corner = 0; corner < corners.size(); ++corner) {
-              Vec3 point{static_cast<double>(x), static_cast<double>(y),
-                         static_cast<double>(z)};
-              point[static_cast<std::size_t>(axis)] +=
-                  direction > 0 ? 1.0 : 0.0;
-              point[static_cast<std::size_t>(tangentAxes[0])] +=
-                  cornerOffsets[corner][0];
-              point[static_cast<std::size_t>(tangentAxes[1])] +=
-                  cornerOffsets[corner][1];
-              corners[corner] = point;
-            }
-            faces.push_back(
-                {block, axis, direction, corners, world.blockAt(block)});
-          }
-        }
+        appendVisibleBlockFaces(world, block, faces);
+      }
+    }
+  }
+  return faces;
+}
+
+std::vector<VisibleFace3D> buildVisibleFaces3DChunk(const BlockWorld3D &world,
+                                                    const ChunkCoord &chunk) {
+  std::vector<VisibleFace3D> faces;
+  for (int z = 0; z < chunkSize; ++z) {
+    for (int y = 0; y < chunkSize; ++y) {
+      for (int x = 0; x < chunkSize; ++x) {
+        appendVisibleBlockFaces(world,
+                                {chunk.x * chunkSize + x,
+                                 chunk.y * chunkSize + y,
+                                 chunk.z * chunkSize + z},
+                                faces, false);
       }
     }
   }

@@ -14,6 +14,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "proj4d/camera.hpp"
@@ -56,8 +57,16 @@ struct FeatureGeometryCache {
   BlockCoord center{};
   std::uint64_t worldRevision{std::numeric_limits<std::uint64_t>::max()};
   bool initialized{};
+  VisibilityGrid4D visibilityGrid;
   std::vector<FeatureEdge4D> edges;
   std::vector<VisibleBoundaryCell4D> boundaryCells;
+  std::vector<Line3> visibleLines;
+  Vec4 linePosition{};
+  Vec4 lineImageX{};
+  Vec4 lineImageY{};
+  Vec4 lineImageZ{};
+  Vec4 lineForward{};
+  bool linesInitialized{};
   SDL_Texture *volumeTexture{};
   int volumeWidth{};
   int volumeHeight{};
@@ -1107,31 +1116,40 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
   const BlockCoord center = containingBlock(camera.position);
   if (!geometryCache.initialized || geometryCache.center != center ||
       geometryCache.worldRevision != world.revision()) {
-    world.prefetchRegion(center, renderBlockRadius);
-    geometryCache.center = center;
-    geometryCache.worldRevision = world.revision();
-    geometryCache.boundaryCells = buildVisibleBoundaryCells(world, center);
-    geometryCache.edges = buildFeatureEdges(geometryCache.boundaryCells);
-    geometryCache.initialized = true;
-    geometryCache.volumeInitialized = false;
-    topologyDone = SDL_GetPerformanceCounter();
+    if (world.prepareRegion(center, renderBlockRadius)) {
+      const bool mayReuse = geometryCache.initialized &&
+                            geometryCache.worldRevision == world.revision();
+      geometryCache.visibilityGrid = buildVisibilityGrid4D(
+          world, center, renderBlockRadius,
+          mayReuse ? &geometryCache.visibilityGrid : nullptr);
+      geometryCache.center = center;
+      geometryCache.worldRevision = world.revision();
+      geometryCache.boundaryCells = buildVisibleBoundaryCells(
+          geometryCache.visibilityGrid, center, renderBlockRadius);
+      geometryCache.edges = buildFeatureEdges(geometryCache.boundaryCells);
+      geometryCache.initialized = true;
+      geometryCache.volumeInitialized = false;
+      geometryCache.linesInitialized = false;
+      topologyDone = SDL_GetPerformanceCounter();
+    }
   }
   const auto sameVector = [](const Vec4 &left, const Vec4 &right) {
     return left.x == right.x && left.y == right.y && left.z == right.z &&
            left.w == right.w;
   };
   const bool volumeChanged =
-      !geometryCache.volumeInitialized ||
-      !sameVector(geometryCache.volumePosition, camera.position) ||
-      !sameVector(geometryCache.volumeImageX, camera.imageX) ||
-      !sameVector(geometryCache.volumeImageY, camera.imageY) ||
-      !sameVector(geometryCache.volumeImageZ, camera.imageZ) ||
-      !sameVector(geometryCache.volumeForward, camera.forward) ||
-      geometryCache.volumeDisplayYaw != display.yaw ||
-      geometryCache.volumeDisplayPitch != display.pitch ||
-      geometryCache.volumeDisplayDistance != display.distance ||
-      geometryCache.volumeDisplayWidth != width ||
-      geometryCache.volumeDisplayHeight != height;
+      geometryCache.initialized &&
+      (!geometryCache.volumeInitialized ||
+       !sameVector(geometryCache.volumePosition, camera.position) ||
+       !sameVector(geometryCache.volumeImageX, camera.imageX) ||
+       !sameVector(geometryCache.volumeImageY, camera.imageY) ||
+       !sameVector(geometryCache.volumeImageZ, camera.imageZ) ||
+       !sameVector(geometryCache.volumeForward, camera.forward) ||
+       geometryCache.volumeDisplayYaw != display.yaw ||
+       geometryCache.volumeDisplayPitch != display.pitch ||
+       geometryCache.volumeDisplayDistance != display.distance ||
+       geometryCache.volumeDisplayWidth != width ||
+       geometryCache.volumeDisplayHeight != height);
   if (volumeChanged) {
     const std::uint64_t volumeStart = SDL_GetPerformanceCounter();
     std::vector<ProjectedBoundaryVolume4D> volumes =
@@ -1198,24 +1216,88 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
                    &destination);
   }
   drawVisionCube(renderer, display, width, height);
-  const std::vector<Line3> lines =
-      projectVisibleFeatureEdges(world, geometryCache.edges, camera);
-  for (const Line3 &line : lines) {
-    drawLine3(renderer, display, width, height, line,
-              blockColor(line.material).array());
-  }
-  if (const auto hit = raycast(world, camera.position, camera.forward, 8.0)) {
-    for (const Line3 &line :
-         buildVisibleTesseractWireframe(world, hit->block, camera)) {
-      drawLine3(renderer, display, width, height, line, {255, 255, 255});
+  const bool linesChanged =
+      geometryCache.initialized &&
+      (!geometryCache.linesInitialized ||
+       !sameVector(geometryCache.linePosition, camera.position) ||
+       !sameVector(geometryCache.lineImageX, camera.imageX) ||
+       !sameVector(geometryCache.lineImageY, camera.imageY) ||
+       !sameVector(geometryCache.lineImageZ, camera.imageZ) ||
+       !sameVector(geometryCache.lineForward, camera.forward));
+  if (linesChanged) {
+    const std::uint64_t lineStart = SDL_GetPerformanceCounter();
+    geometryCache.visibleLines = projectVisibleFeatureEdges(
+        geometryCache.visibilityGrid, geometryCache.edges, camera);
+    if (const auto hit = raycast(world, camera.position, camera.forward, 8.0)) {
+      std::vector<Line3> selection = buildVisibleTesseractWireframe(
+          geometryCache.visibilityGrid, hit->block, camera);
+      for (Line3 &line : selection) {
+        line.material = BlockId::air;
+      }
+      geometryCache.visibleLines.insert(geometryCache.visibleLines.end(),
+                                        selection.begin(), selection.end());
     }
+    geometryCache.linePosition = camera.position;
+    geometryCache.lineImageX = camera.imageX;
+    geometryCache.lineImageY = camera.imageY;
+    geometryCache.lineImageZ = camera.imageZ;
+    geometryCache.lineForward = camera.forward;
+    geometryCache.linesInitialized = true;
+    if (profile) {
+      const double milliseconds =
+          static_cast<double>(SDL_GetPerformanceCounter() - lineStart) *
+          1000.0 / static_cast<double>(SDL_GetPerformanceFrequency());
+      std::cerr << "4D profile: edges=" << milliseconds
+                << " ms, source_edges=" << geometryCache.edges.size()
+                << ", visible_fragments=" << geometryCache.visibleLines.size()
+                << '\n';
+    }
+  }
+  for (const Line3 &line : geometryCache.visibleLines) {
+    drawLine3(renderer, display, width, height, line,
+              line.material == BlockId::air
+                  ? std::array<std::uint8_t, 3>{255, 255, 255}
+                  : blockColor(line.material).array());
   }
   drawCrosshair(renderer, display, width, height);
   drawStatusBar(renderer, camera, width);
 }
 
 void render(SDL_Renderer *renderer, const BlockWorld2D &world,
-            const Camera2D &camera, int width, int height) {
+            const Camera2D &camera, int width, int height,
+            struct VisionGeometry2D &vision);
+
+struct VisionGeometry2D {
+  BlockCoord2D center{};
+  std::uint64_t worldRevision{std::numeric_limits<std::uint64_t>::max()};
+  bool initialized{};
+  std::unordered_map<ChunkCoord, std::vector<VisibleEdge2D>, ChunkCoordHash>
+      chunkEdges;
+  std::vector<VisibleEdge2D> edges;
+};
+
+std::vector<ChunkCoord> chunksFor2D(const BlockCoord2D &center, int radius) {
+  const ChunkCoord first =
+      chunkCoordForBlock({center.x - radius, center.y - radius, 0, 0});
+  const ChunkCoord last =
+      chunkCoordForBlock({center.x + radius, center.y + radius, 0, 0});
+  std::vector<ChunkCoord> chunks;
+  for (int y = first.y; y <= last.y; ++y) {
+    for (int x = first.x; x <= last.x; ++x) {
+      chunks.push_back({x, y, 0, 0});
+    }
+  }
+  return chunks;
+}
+
+bool chunksTouch2D(const ChunkCoord &left, const ChunkCoord &right) {
+  return left.w == right.w && left.z == right.z &&
+         std::abs(left.x - right.x) + std::abs(left.y - right.y) == 1;
+}
+
+void render(SDL_Renderer *renderer, const BlockWorld2D &world,
+            const Camera2D &camera, int width, int height,
+            VisionGeometry2D &vision) {
   SDL_SetRenderDrawColor(renderer, skyColor.red, skyColor.green, skyColor.blue,
                          255);
   SDL_RenderClear(renderer);
@@ -1254,10 +1336,60 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
   }
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
+  const BlockCoord2D center = containingBlock(camera.position);
+  if (!vision.initialized || vision.center != center ||
+      vision.worldRevision != world.revision()) {
+    const std::vector<ChunkCoord> visibleChunks =
+        chunksFor2D(center, terrainRenderDistance2D);
+    if (world.prepareChunks(visibleChunks)) {
+      if (vision.worldRevision != world.revision()) {
+        vision.chunkEdges.clear();
+      }
+      std::vector<ChunkCoord> newlyVisible;
+      for (const ChunkCoord chunk : visibleChunks) {
+        if (!vision.chunkEdges.contains(chunk)) {
+          newlyVisible.push_back(chunk);
+        }
+      }
+      std::unordered_map<ChunkCoord, std::vector<VisibleEdge2D>, ChunkCoordHash>
+          retained;
+      retained.reserve(visibleChunks.size());
+      for (const ChunkCoord chunk : visibleChunks) {
+        const bool touchesNewChunk =
+            std::ranges::any_of(newlyVisible, [&](const ChunkCoord &added) {
+              return chunksTouch2D(chunk, added);
+            });
+        if (auto existing = vision.chunkEdges.find(chunk);
+            existing != vision.chunkEdges.end() && !touchesNewChunk) {
+          retained.emplace(chunk, std::move(existing->second));
+        } else {
+          retained.emplace(chunk, buildVisibleEdges2DChunk(world, chunk));
+        }
+      }
+      vision.chunkEdges = std::move(retained);
+      vision.edges.clear();
+      const int minimumX = center.x - terrainRenderDistance2D;
+      const int maximumX = center.x + terrainRenderDistance2D;
+      const int minimumY = center.y - terrainRenderDistance2D;
+      const int maximumY = center.y + terrainRenderDistance2D;
+      for (const auto &[chunk, edges] : vision.chunkEdges) {
+        static_cast<void>(chunk);
+        for (const VisibleEdge2D &edge : edges) {
+          if (edge.block.x >= minimumX && edge.block.x <= maximumX &&
+              edge.block.y >= minimumY && edge.block.y <= maximumY) {
+            vision.edges.push_back(edge);
+          }
+        }
+      }
+      vision.center = center;
+      vision.worldRevision = world.revision();
+      vision.initialized = true;
+    }
+  }
   const auto target = raycast(world, camera.position, camera.forward(), 8.0);
-  const std::vector<VisionSample2D> samples =
-      buildVisionLine(world, camera, height, camera.farPlane,
-                      target ? std::optional(target->block) : std::nullopt);
+  const std::vector<VisionSample2D> samples = rasterizeVisionEdges2D(
+      vision.edges, camera, height,
+      target ? std::optional(target->block) : std::nullopt);
   int runStart = 0;
   while (runStart < height) {
     const VisionSample2D &sample =
@@ -1294,8 +1426,33 @@ struct VisionGeometry3D {
   BlockCoord3D center{};
   std::uint64_t worldRevision{std::numeric_limits<std::uint64_t>::max()};
   bool geometryInitialized{};
+  std::unordered_map<ChunkCoord, std::vector<VisibleFace3D>, ChunkCoordHash>
+      chunkFaces;
   std::vector<VisibleFace3D> faces;
 };
+
+std::vector<ChunkCoord> chunksFor3D(const BlockCoord3D &center, int radius) {
+  const ChunkCoord first = chunkCoordForBlock(
+      {center.x - radius, center.y - radius, center.z - radius, 0});
+  const ChunkCoord last = chunkCoordForBlock(
+      {center.x + radius, center.y + radius, center.z + radius, 0});
+  std::vector<ChunkCoord> chunks;
+  for (int z = first.z; z <= last.z; ++z) {
+    for (int y = first.y; y <= last.y; ++y) {
+      for (int x = first.x; x <= last.x; ++x) {
+        chunks.push_back({x, y, z, 0});
+      }
+    }
+  }
+  return chunks;
+}
+
+bool chunksTouch3D(const ChunkCoord &left, const ChunkCoord &right) {
+  return left.w == right.w && std::abs(left.x - right.x) +
+                                      std::abs(left.y - right.y) +
+                                      std::abs(left.z - right.z) ==
+                                  1;
+}
 
 ScreenPoint visionScreenPoint(const Vec2 &point, int width, int height) {
   return {static_cast<int>(std::lround((point.x + 1.0) * 0.5 * width)),
@@ -1380,10 +1537,55 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
   const BlockCoord3D center = containingBlock(camera.position);
   if (!vision.geometryInitialized || vision.center != center ||
       vision.worldRevision != world.revision()) {
-    vision.center = center;
-    vision.worldRevision = world.revision();
-    vision.faces = buildVisibleFaces3D(world, center);
-    vision.geometryInitialized = true;
+    const std::vector<ChunkCoord> visibleChunks =
+        chunksFor3D(center, renderBlockRadius3D);
+    if (world.prepareChunks(visibleChunks)) {
+      if (vision.worldRevision != world.revision()) {
+        vision.chunkFaces.clear();
+      }
+      std::vector<ChunkCoord> newlyVisible;
+      for (const ChunkCoord chunk : visibleChunks) {
+        if (!vision.chunkFaces.contains(chunk)) {
+          newlyVisible.push_back(chunk);
+        }
+      }
+      std::unordered_map<ChunkCoord, std::vector<VisibleFace3D>, ChunkCoordHash>
+          retained;
+      retained.reserve(visibleChunks.size());
+      for (const ChunkCoord chunk : visibleChunks) {
+        const bool touchesNewChunk =
+            std::ranges::any_of(newlyVisible, [&](const ChunkCoord &added) {
+              return chunksTouch3D(chunk, added);
+            });
+        if (auto existing = vision.chunkFaces.find(chunk);
+            existing != vision.chunkFaces.end() && !touchesNewChunk) {
+          retained.emplace(chunk, std::move(existing->second));
+        } else {
+          retained.emplace(chunk, buildVisibleFaces3DChunk(world, chunk));
+        }
+      }
+      vision.chunkFaces = std::move(retained);
+      vision.faces.clear();
+      const BlockCoord3D minimum{center.x - renderBlockRadius3D,
+                                 center.y - renderBlockRadius3D,
+                                 center.z - renderBlockRadius3D};
+      const BlockCoord3D maximum{center.x + renderBlockRadius3D,
+                                 center.y + renderBlockRadius3D,
+                                 center.z + renderBlockRadius3D};
+      for (const auto &[chunk, faces] : vision.chunkFaces) {
+        static_cast<void>(chunk);
+        for (const VisibleFace3D &face : faces) {
+          if (face.block.x >= minimum.x && face.block.x <= maximum.x &&
+              face.block.y >= minimum.y && face.block.y <= maximum.y &&
+              face.block.z >= minimum.z && face.block.z <= maximum.z) {
+            vision.faces.push_back(face);
+          }
+        }
+      }
+      vision.center = center;
+      vision.worldRevision = world.revision();
+      vision.geometryInitialized = true;
+    }
   }
   SDL_SetRenderDrawColor(renderer, skyColor.red, skyColor.green, skyColor.blue,
                          255);
@@ -1658,7 +1860,10 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
                                 " | WASD move | Mouse look | Shift sneak";
       SDL_SetWindowTitle(window, title.c_str());
     }
-    if (smokeTest && frameCount >= 3) {
+    if (smokeTest && !vision.geometryInitialized) {
+      SDL_Delay(1U);
+    }
+    if (smokeTest && frameCount >= 3 && vision.geometryInitialized) {
       if (!saveRendererBitmap(renderer, width, height, smokeOutput)) {
         std::cerr << "Could not save 3D smoke image: " << SDL_GetError()
                   << '\n';
@@ -1704,6 +1909,7 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
   camera.position = spawnPosition;
   camera.turnVertical(-0.28);
   PlayerMotionState2D playerMotion{0.0, true, spawnPosition};
+  VisionGeometry2D vision;
   InventoryUiState inventoryUi;
   if (inventorySmoke) {
     inventoryUi.open = true;
@@ -1848,7 +2054,7 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
     int width = 1;
     int height = 1;
     SDL_GetRendererOutputSize(renderer, &width, &height);
-    render(renderer, world, camera, width, height);
+    render(renderer, world, camera, width, height, vision);
     drawQuickStorage(renderer, game.inventory(), PlayDimension::Two, width,
                      height);
     if (inventoryUi.open) {
@@ -1865,7 +2071,10 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
           " | W/S move | Mouse: vertical | Z: reverse | Shift: sneak";
       SDL_SetWindowTitle(window, title.c_str());
     }
-    if (smokeTest && frameCount >= 3) {
+    if (smokeTest && !vision.initialized) {
+      SDL_Delay(1U);
+    }
+    if (smokeTest && frameCount >= 3 && vision.initialized) {
       if (!saveRendererBitmap(renderer, width, height, smokeOutput)) {
         std::cerr << "Could not save 2D smoke image: " << SDL_GetError()
                   << '\n';
@@ -2251,7 +2460,10 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                                 "Ctrl: orbit";
       SDL_SetWindowTitle(window, title.c_str());
     }
-    if (smokeTest && frameCount >= 3) {
+    if (smokeTest && !geometryCache.initialized) {
+      SDL_Delay(1U);
+    }
+    if (smokeTest && frameCount >= 3 && geometryCache.initialized) {
       if (!saveRendererBitmap(renderer, width, height, smokeOutput)) {
         std::cerr << "Could not save smoke image: " << SDL_GetError() << '\n';
         frameCount = -1;

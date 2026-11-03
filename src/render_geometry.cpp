@@ -4,9 +4,42 @@
 #include <array>
 #include <bitset>
 #include <cmath>
+#include <limits>
 #include <map>
+#include <utility>
 
 namespace proj4d {
+
+VisibilityGrid4D::VisibilityGrid4D(BlockCoord minimum, int extent,
+                                   std::vector<BlockId> blocks)
+    : minimum_(minimum), extent_(extent), blocks_(std::move(blocks)) {}
+
+bool VisibilityGrid4D::contains(const BlockCoord &block) const {
+  return extent_ > 0 && block.x >= minimum_.x && block.y >= minimum_.y &&
+         block.z >= minimum_.z && block.w >= minimum_.w &&
+         block.x < minimum_.x + extent_ && block.y < minimum_.y + extent_ &&
+         block.z < minimum_.z + extent_ && block.w < minimum_.w + extent_;
+}
+
+BlockId VisibilityGrid4D::blockAt(const BlockCoord &block) const {
+  if (!contains(block)) {
+    return BlockId::stone;
+  }
+  const std::size_t x = static_cast<std::size_t>(block.x - minimum_.x);
+  const std::size_t y = static_cast<std::size_t>(block.y - minimum_.y);
+  const std::size_t z = static_cast<std::size_t>(block.z - minimum_.z);
+  const std::size_t w = static_cast<std::size_t>(block.w - minimum_.w);
+  const std::size_t size = static_cast<std::size_t>(extent_);
+  return blocks_[x + size * (z + size * (y + size * w))];
+}
+
+bool VisibilityGrid4D::isSolid(const BlockCoord &block) const {
+  return proj4d::isSolid(blockAt(block));
+}
+
+const BlockCoord &VisibilityGrid4D::minimum() const { return minimum_; }
+
+int VisibilityGrid4D::extent() const { return extent_; }
 
 namespace {
 
@@ -66,6 +99,58 @@ bool hasClearSightline(const BlockWorld &world, const Camera4D &camera,
   const auto obstruction =
       raycast(world, camera.position, offset, distance - targetInset);
   return !obstruction;
+}
+
+bool gridRaycastHits(const VisibilityGrid4D &grid, const Vec4 &origin,
+                     const Vec4 &direction, double maximumDistance) {
+  const Vec4 rayDirection = normalized(direction);
+  BlockCoord current = containingBlock(origin);
+  std::array<int, 4> step{};
+  std::array<double, 4> nextBoundary{};
+  std::array<double, 4> boundaryStride{};
+  for (std::size_t axis = 0; axis < 4; ++axis) {
+    const double component = rayDirection[axis];
+    if (std::abs(component) <= 1.0e-12) {
+      nextBoundary[axis] = std::numeric_limits<double>::infinity();
+      boundaryStride[axis] = std::numeric_limits<double>::infinity();
+      continue;
+    }
+    step[axis] = component > 0.0 ? 1 : -1;
+    const double boundary = component > 0.0
+                                ? static_cast<double>(current[axis] + 1)
+                                : static_cast<double>(current[axis]);
+    nextBoundary[axis] = (boundary - origin[axis]) / component;
+    boundaryStride[axis] = std::abs(1.0 / component);
+  }
+  double distance = 0.0;
+  while (distance <= maximumDistance) {
+    if (!grid.contains(current) || grid.isSolid(current)) {
+      return true;
+    }
+    std::size_t selectedAxis = 0;
+    for (std::size_t axis = 1; axis < 4; ++axis) {
+      if (nextBoundary[axis] < nextBoundary[selectedAxis]) {
+        selectedAxis = axis;
+      }
+    }
+    distance = nextBoundary[selectedAxis];
+    if (!std::isfinite(distance) || distance > maximumDistance) {
+      break;
+    }
+    current[selectedAxis] += step[selectedAxis];
+    nextBoundary[selectedAxis] += boundaryStride[selectedAxis];
+  }
+  return false;
+}
+
+bool hasClearSightline(const VisibilityGrid4D &grid, const Camera4D &camera,
+                       const Vec4 &point) {
+  constexpr double targetInset = 1.0e-5;
+  const Vec4 offset = point - camera.position;
+  const double distance = length(offset);
+  return distance <= camera.nearPlane ||
+         !gridRaycastHits(grid, camera.position, offset,
+                          distance - targetInset);
 }
 
 struct ClippedLine3 {
@@ -183,7 +268,8 @@ projectSourceEdge(const Camera4D &camera, const FeatureEdge4D &edge) {
   };
 }
 
-void appendVisibleFragments(const BlockWorld &world, const Camera4D &camera,
+template <typename Occupancy>
+void appendVisibleFragments(const Occupancy &world, const Camera4D &camera,
                             const ProjectedSourceEdge &edge,
                             std::vector<Line3> &lines) {
   const Vec3 projectedDelta = edge.line.to - edge.line.from;
@@ -243,6 +329,33 @@ std::vector<FeatureEdge4D> tesseractEdges(const BlockCoord &block,
 
 } // namespace
 
+VisibilityGrid4D buildVisibilityGrid4D(const BlockWorld &world,
+                                       const BlockCoord &center, int radius,
+                                       const VisibilityGrid4D *previous) {
+  radius = std::max(0, radius);
+  const int extent = radius * 2 + 3;
+  const BlockCoord minimum{center.x - radius - 1, center.y - radius - 1,
+                           center.z - radius - 1, center.w - radius - 1};
+  const std::size_t count =
+      static_cast<std::size_t>(extent) * extent * extent * extent;
+  std::vector<BlockId> blocks(count, BlockId::air);
+  std::size_t index = 0U;
+  for (int w = 0; w < extent; ++w) {
+    for (int y = 0; y < extent; ++y) {
+      for (int z = 0; z < extent; ++z) {
+        for (int x = 0; x < extent; ++x) {
+          const BlockCoord block{minimum.x + x, minimum.y + y, minimum.z + z,
+                                 minimum.w + w};
+          blocks[index++] = previous && previous->contains(block)
+                                ? previous->blockAt(block)
+                                : world.blockAt(block);
+        }
+      }
+    }
+  }
+  return {minimum, extent, std::move(blocks)};
+}
+
 std::vector<FeatureEdge4D> buildFeatureEdges(const BlockWorld &world,
                                              const BlockCoord &center,
                                              int radius) {
@@ -298,6 +411,13 @@ buildFeatureEdges(std::span<const VisibleBoundaryCell4D> cells) {
 std::vector<VisibleBoundaryCell4D>
 buildVisibleBoundaryCells(const BlockWorld &world, const BlockCoord &center,
                           int radius) {
+  return buildVisibleBoundaryCells(buildVisibilityGrid4D(world, center, radius),
+                                   center, radius);
+}
+
+std::vector<VisibleBoundaryCell4D>
+buildVisibleBoundaryCells(const VisibilityGrid4D &grid,
+                          const BlockCoord &center, int radius) {
   if (radius < 0) {
     return {};
   }
@@ -307,16 +427,16 @@ buildVisibleBoundaryCells(const BlockWorld &world, const BlockCoord &center,
       for (int y = center.y - radius; y <= center.y + radius; ++y) {
         for (int x = center.x - radius; x <= center.x + radius; ++x) {
           const BlockCoord block{x, y, z, w};
-          if (!world.isSolid(block)) {
+          if (!grid.isSolid(block)) {
             continue;
           }
           for (int axis = 0; axis < 4; ++axis) {
             for (const int side : {-1, 1}) {
               BlockCoord neighbor = block;
               neighbor[static_cast<std::size_t>(axis)] += side;
-              if (!world.isSolid(neighbor)) {
+              if (!grid.isSolid(neighbor)) {
                 visibleCells.push_back(
-                    {block, axis, side, world.blockAt(block)});
+                    {block, axis, side, grid.blockAt(block)});
               }
             }
           }
@@ -358,6 +478,20 @@ projectVisibleFeatureEdges(const BlockWorld &world,
   return lines;
 }
 
+std::vector<Line3>
+projectVisibleFeatureEdges(const VisibilityGrid4D &grid,
+                           std::span<const FeatureEdge4D> edges,
+                           const Camera4D &camera) {
+  std::vector<Line3> lines;
+  lines.reserve(edges.size());
+  for (const FeatureEdge4D &edge : edges) {
+    if (const auto projected = projectSourceEdge(camera, edge)) {
+      appendVisibleFragments(grid, camera, *projected, lines);
+    }
+  }
+  return lines;
+}
+
 std::vector<Line3> buildVisionGeometry(const BlockWorld &world,
                                        const Camera4D &camera,
                                        const BlockCoord &center, int radius) {
@@ -375,6 +509,13 @@ std::vector<Line3> buildVisibleTesseractWireframe(const BlockWorld &world,
                                                   const Camera4D &camera) {
   return projectVisibleFeatureEdges(
       world, tesseractEdges(block, world.blockAt(block)), camera);
+}
+
+std::vector<Line3> buildVisibleTesseractWireframe(const VisibilityGrid4D &grid,
+                                                  const BlockCoord &block,
+                                                  const Camera4D &camera) {
+  return projectVisibleFeatureEdges(
+      grid, tesseractEdges(block, grid.blockAt(block)), camera);
 }
 
 } // namespace proj4d

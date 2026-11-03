@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "hypercraft/world/terrain_generator.hpp"
@@ -885,6 +886,107 @@ void testThreeDimensionalProjectionAndVisibleFaces() {
              proj4d::visionFaceColors3D[2][2] >
                  proj4d::visionFaceColors3D[2][0],
          "Z-perpendicular cube faces use the blue palette");
+
+  proj4d::BlockWorld boundaryBacking(proj4d::TerrainMode::Flat, 4302U);
+  static_cast<void>(
+      boundaryBacking.setBlock({15, 100, 0, 0}, proj4d::BlockId::stone));
+  proj4d::BlockWorld3D boundaryWorld(boundaryBacking);
+  const proj4d::ChunkCoord boundaryChunk{0, 6, 0, 0};
+  const auto beforeNeighbor =
+      proj4d::buildVisibleFaces3DChunk(boundaryWorld, boundaryChunk);
+  const auto isPositiveBoundary = [](const proj4d::VisibleFace3D &face) {
+    return face.block == proj4d::BlockCoord3D{15, 100, 0} &&
+           face.worldAxis == 0 && face.normalDirection == 1;
+  };
+  expect(std::ranges::none_of(beforeNeighbor, isPositiveBoundary),
+         "missing neighbor chunks are opaque during cached face extraction");
+  static_cast<void>(boundaryBacking.blockAt({16, 100, 0, 0}));
+  const auto afterNeighbor =
+      proj4d::buildVisibleFaces3DChunk(boundaryWorld, boundaryChunk);
+  expect(
+      std::ranges::any_of(afterNeighbor, isPositiveBoundary),
+      "a rebuilt face cache exposes a boundary after its air neighbor loads");
+}
+
+void testBackgroundChunkStreamingAndLoadedQueries() {
+  proj4d::BlockWorld world(proj4d::TerrainMode::Low, 0x51A7U, 8U);
+  constexpr std::array requested{proj4d::ChunkCoord{3, 1, -2, 4}};
+  const proj4d::BlockCoord sample{3 * proj4d::chunkSize, proj4d::chunkSize,
+                                  -2 * proj4d::chunkSize,
+                                  4 * proj4d::chunkSize};
+  expect(!world.loadedBlockAt(sample),
+         "a loaded-only query never generates a missing chunk");
+  expect(!world.prepareChunks(requested),
+         "the first terrain request is queued without blocking the frame");
+
+  bool ready = false;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (!ready && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ready = world.prepareChunks(requested);
+  }
+  expect(ready,
+         "the persistent background streamer completes requested chunks");
+  const auto loaded = world.loadedBlockAt(sample);
+  expect(loaded && *loaded == world.generatedBlockAt(sample),
+         "a streamed chunk exactly matches the selected terrain generator");
+  expect(world.loadedChunkCount() <= world.maximumLoadedChunks(),
+         "background streaming preserves the bounded chunk cache");
+}
+
+void testDenseVisibilityGridMatchesWorld() {
+  proj4d::BlockWorld world(proj4d::TerrainMode::Flat, 0xD345EU, 16U);
+  static_cast<void>(world.setBlock({0, 100, 0, 0}, proj4d::BlockId::stone));
+  static_cast<void>(world.setBlock({1, 100, 0, 0}, proj4d::BlockId::glass));
+  const proj4d::BlockCoord firstCenter{0, 100, 0, 0};
+  const proj4d::VisibilityGrid4D first =
+      proj4d::buildVisibilityGrid4D(world, firstCenter, 1);
+  const proj4d::BlockCoord secondCenter{1, 100, 0, 0};
+  const proj4d::VisibilityGrid4D shifted =
+      proj4d::buildVisibilityGrid4D(world, secondCenter, 1, &first);
+
+  bool exact = true;
+  for (int w = -2; w <= 2; ++w) {
+    for (int z = -2; z <= 2; ++z) {
+      for (int y = 98; y <= 102; ++y) {
+        for (int x = -1; x <= 3; ++x) {
+          const proj4d::BlockCoord block{x, y, z, w};
+          exact = exact && shifted.blockAt(block) == world.blockAt(block);
+        }
+      }
+    }
+  }
+  expect(exact, "a recentered dense 4D occupancy grid stays byte-exact");
+
+  const auto direct = proj4d::buildVisibleBoundaryCells(world, secondCenter, 1);
+  const auto cached =
+      proj4d::buildVisibleBoundaryCells(shifted, secondCenter, 1);
+  bool sameBoundaries = direct.size() == cached.size();
+  if (sameBoundaries) {
+    for (std::size_t index = 0; index < direct.size(); ++index) {
+      sameBoundaries = sameBoundaries &&
+                       direct[index].block == cached[index].block &&
+                       direct[index].axis == cached[index].axis &&
+                       direct[index].side == cached[index].side &&
+                       direct[index].material == cached[index].material;
+    }
+  }
+  expect(sameBoundaries,
+         "cached 4D occupancy extracts the same visible solid boundaries");
+  expect(
+      shifted.isSolid({1000, 1000, 1000, 1000}),
+      "positions outside prepared visibility data are conservatively opaque");
+}
+
+void testFastSolidLookupMatchesHypercraft() {
+  bool exact = true;
+  for (int value = 0; value <= static_cast<int>(proj4d::BlockId::torch);
+       ++value) {
+    const auto block = static_cast<proj4d::BlockId>(value);
+    exact = exact && proj4d::isSolid(block) == hypercraft::is_solid(block);
+  }
+  expect(exact, "the constant-time solid table matches every Hypercraft block");
 }
 
 void testThreeDimensionalPhysicsAndInteraction() {
@@ -1029,6 +1131,41 @@ void testTrueTwoDimensionalProjection() {
       proj4d::buildVisionLine(floorWorld, floorCamera, 101, 8.0);
   expect(floorLine[50].solid && floorLine[50].worldAxis == 0,
          "a Y-facing block side renders as a green X edge interval");
+
+  const std::array projectedEdges{
+      proj4d::VisibleEdge2D{
+          {0, 100}, 1, {0.0, 100.0}, {0.0, 101.0}, proj4d::BlockId::stone},
+      proj4d::VisibleEdge2D{
+          {2, 100}, 1, {2.0, 100.0}, {2.0, 101.0}, proj4d::BlockId::glass},
+  };
+  const auto rasterized = proj4d::rasterizeVisionEdges2D(
+      projectedEdges, sideCamera, 101, proj4d::BlockCoord2D{0, 100});
+  expect(rasterized[50].solid &&
+             rasterized[50].block == proj4d::BlockCoord2D{0, 100} &&
+             rasterized[50].targeted &&
+             rasterized[50].material == proj4d::BlockId::stone,
+         "standard 2D boundary rasterization depth-tests the nearest material");
+
+  proj4d::BlockWorld boundaryBacking(proj4d::TerrainMode::Flat, 4102U);
+  static_cast<void>(
+      boundaryBacking.setBlock({15, 100, 0, 0}, proj4d::BlockId::stone));
+  proj4d::BlockWorld2D boundaryWorld(boundaryBacking);
+  const proj4d::ChunkCoord boundaryChunk{0, 6, 0, 0};
+  const auto beforeNeighbor =
+      proj4d::buildVisibleEdges2DChunk(boundaryWorld, boundaryChunk);
+  const auto isPositiveBoundary = [](const proj4d::VisibleEdge2D &edge) {
+    return edge.block == proj4d::BlockCoord2D{15, 100} &&
+           proj4d::nearlyEqual(edge.from.x, 16.0) &&
+           proj4d::nearlyEqual(edge.to.x, 16.0);
+  };
+  expect(std::ranges::none_of(beforeNeighbor, isPositiveBoundary),
+         "missing neighbor chunks are opaque during cached edge extraction");
+  static_cast<void>(boundaryBacking.blockAt({16, 100, 0, 0}));
+  const auto afterNeighbor =
+      proj4d::buildVisibleEdges2DChunk(boundaryWorld, boundaryChunk);
+  expect(
+      std::ranges::any_of(afterNeighbor, isPositiveBoundary),
+      "a rebuilt chunk cache exposes a boundary after its air neighbor loads");
 }
 
 void testTwoDimensionalPhysicsAndInteraction() {
@@ -1718,6 +1855,9 @@ int main() {
     testTrueTwoDimensionalWorldAndChunks();
     testSharedWorldSaving();
     testThreeDimensionalProjectionAndVisibleFaces();
+    testBackgroundChunkStreamingAndLoadedQueries();
+    testDenseVisibilityGridMatchesWorld();
+    testFastSolidLookupMatchesHypercraft();
     testThreeDimensionalPhysicsAndInteraction();
     testTrueTwoDimensionalProjection();
     testTwoDimensionalPhysicsAndInteraction();
