@@ -108,6 +108,13 @@ block can therefore hide part of an edge without incorrectly erasing the rest,
 and external orbit of the 3D vision cube does not rerun 4D occlusion. Sampling
 has a fixed per-edge cap. The white selection wireframe uses the same path.
 
+Filled projected boundaries carry an analytical inverse-perspective source
+depth. Where several volumes overlap, each display-ray interval keeps the
+nearest opaque 4D surface, blends only fluids in front of it, and rejects every
+buried face before performing the requested path-length average through the 3D
+vision cube. The result does not depend on block extraction order and does not
+sample or march through the infinite world.
+
 ## Build and run
 
 Proj4D requires CMake 3.24 or newer, a C++20 compiler, and SDL2. The repository
@@ -321,9 +328,10 @@ descend. Fluids do not flow and do not collide with the player.
   cross-dimensional edits, save/reload round trips, terrain-save isolation,
   corruption rejection, exact pinned-Hypercraft terrain parity, material
   colors, dimensional inventories and recipes, tools, clouds, negative
-  coordinates, infinite depth, bounded caches, occlusion, movement, sneaking,
-  jumping, fluid transparency and swimming, inventory gestures, 4D quick-slot
-  sequences, targeting, mining, and placement.
+  coordinates, infinite depth, bounded caches, complete opaque source-depth
+  occlusion, movement, sneaking, jumping, fluid transparency and swimming,
+  inventory gestures, 4D quick-slot sequences, targeting, mining, and
+  placement.
 
 See the repository's
 [Proj4D development skill](.codex/skills/proj4d-development-guardrails/SKILL.md)

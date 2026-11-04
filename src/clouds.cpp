@@ -105,6 +105,10 @@ projectCloudVolumes4D(const std::vector<Cloud4D> &clouds,
         ProjectedBoundaryVolume4D volume;
         volume.material = BlockId::snow;
         volume.brightnessPercent = boundaryBrightnessPercent4D(axis, side);
+        setProjectedSourcePlane4D(
+            volume, camera, axis,
+            cloud.minimum[static_cast<std::size_t>(axis)] +
+                (side > 0 ? cloud.size : 0.0));
         bool complete = true;
         for (int mask = 0; mask < 8; ++mask) {
           const auto projected =

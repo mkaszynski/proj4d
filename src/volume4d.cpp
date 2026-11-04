@@ -207,12 +207,35 @@ struct PixelRay {
 struct PreparedVolume {
   VolumePlaneSet planeSet{};
   BlockColor color{};
-  float opacity{1.0F};
+  double opacity{1.0};
+  double sourceDepthNumerator{};
+  double sourceDepthDenominatorConstant{};
+  Vec3 sourceDepthDenominatorGradient{};
+  bool hasSourceDepth{};
+  bool fluid{};
   int firstX{};
   int lastX{};
   int firstY{};
   int lastY{};
 };
+
+struct VolumeEvent {
+  std::size_t volume{};
+  double position{};
+  bool entering{};
+};
+
+double sourceDepthAt(const PreparedVolume &volume, const Vec3 &point) {
+  const double denominator = volume.sourceDepthDenominatorConstant +
+                             dot(volume.sourceDepthDenominatorGradient, point);
+  if (std::abs(denominator) <= 1.0e-12) {
+    return std::numeric_limits<double>::infinity();
+  }
+  const double depth = volume.sourceDepthNumerator / denominator;
+  return depth > 0.0 && std::isfinite(depth)
+             ? depth
+             : std::numeric_limits<double>::infinity();
+}
 
 } // namespace
 
@@ -226,6 +249,21 @@ int boundaryBrightnessPercent4D(int axis, int side) {
   axis = std::clamp(axis, 0, 3);
   return brightness[static_cast<std::size_t>(axis)]
                    [static_cast<std::size_t>(side > 0 ? 1 : 0)];
+}
+
+void setProjectedSourcePlane4D(ProjectedBoundaryVolume4D &volume,
+                               const Camera4D &camera, int axis,
+                               double planeCoordinate) {
+  axis = std::clamp(axis, 0, 3);
+  const std::size_t sourceAxis = static_cast<std::size_t>(axis);
+  volume.sourceDepthNumerator = planeCoordinate - camera.position[sourceAxis];
+  volume.sourceDepthDenominatorConstant = camera.forward[sourceAxis];
+  volume.sourceDepthDenominatorGradient = {
+      camera.imageX[sourceAxis] / camera.focalLength,
+      camera.imageY[sourceAxis] / camera.focalLength,
+      camera.imageZ[sourceAxis] / camera.focalLength,
+  };
+  volume.hasSourceDepth = true;
 }
 
 std::vector<ProjectedBoundaryVolume4D>
@@ -242,6 +280,10 @@ projectBoundaryVolumes4D(std::span<const VisibleBoundaryCell4D> cells,
     volume.material = cell.material;
     volume.brightnessPercent =
         boundaryBrightnessPercent4D(cell.axis, cell.side);
+    setProjectedSourcePlane4D(
+        volume, camera, cell.axis,
+        static_cast<double>(cell.block[static_cast<std::size_t>(cell.axis)] +
+                            (cell.side > 0 ? 1 : 0)));
     std::array<Vec4, 8> sourceVertices{};
     std::array<double, 8> depths{};
     bool entirelyInside = true;
@@ -346,10 +388,10 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
   const std::size_t pixelCount =
       static_cast<std::size_t>(image.width * image.height);
   image.rgba.assign(pixelCount * 4U, 0U);
-  std::vector<float> red(pixelCount, 0.0F);
-  std::vector<float> green(pixelCount, 0.0F);
-  std::vector<float> blue(pixelCount, 0.0F);
-  std::vector<float> weight(pixelCount, 0.0F);
+  std::vector<double> red(pixelCount, 0.0);
+  std::vector<double> green(pixelCount, 0.0);
+  std::vector<double> blue(pixelCount, 0.0);
+  std::vector<double> weight(pixelCount, 0.0);
   std::vector<PixelRay> rays(pixelCount);
 
   const Vec3 origin = displayOrigin(camera);
@@ -410,41 +452,167 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
                                   image.height - 1);
     const int lastY = std::clamp(static_cast<int>(std::ceil(maximumY)) + 1, 0,
                                  image.height - 1);
-    prepared.push_back(
-        {*planes, shadedBlockColor(volume.material, volume.brightnessPercent),
-         static_cast<float>(blockOpacity(volume.material)) / 255.0F, firstX,
-         lastX, firstY, lastY});
+    prepared.push_back({
+        *planes,
+        shadedBlockColor(volume.material, volume.brightnessPercent),
+        static_cast<double>(blockOpacity(volume.material)) / 255.0,
+        volume.sourceDepthNumerator,
+        volume.sourceDepthDenominatorConstant,
+        volume.sourceDepthDenominatorGradient,
+        volume.hasSourceDepth,
+        isFluid(volume.material),
+        firstX,
+        lastX,
+        firstY,
+        lastY,
+    });
+  }
+
+  std::vector<std::vector<std::size_t>> rowCandidates(
+      static_cast<std::size_t>(image.height));
+  for (std::size_t volume = 0; volume < prepared.size(); ++volume) {
+    for (int y = prepared[volume].firstY; y <= prepared[volume].lastY; ++y) {
+      rowCandidates[static_cast<std::size_t>(y)].push_back(volume);
+    }
   }
 
   const auto renderRows = [&](int rowBegin, int rowEnd) {
-    for (const PreparedVolume &volume : prepared) {
-      const int firstY = std::max(rowBegin, volume.firstY);
-      const int lastY = std::min(rowEnd - 1, volume.lastY);
-      if (firstY > lastY) {
-        continue;
-      }
-      for (int y = firstY; y <= lastY; ++y) {
-        for (int x = volume.firstX; x <= volume.lastX; ++x) {
-          const std::size_t index =
-              static_cast<std::size_t>(y * image.width + x);
-          const PixelRay &ray = rays[index];
-          if (!ray.intersectsCube) {
+    std::vector<VolumeEvent> events;
+    std::vector<std::size_t> active;
+    for (int y = rowBegin; y < rowEnd; ++y) {
+      const auto &candidates = rowCandidates[static_cast<std::size_t>(y)];
+      for (int x = 0; x < image.width; ++x) {
+        const std::size_t index = static_cast<std::size_t>(y * image.width + x);
+        const PixelRay &ray = rays[index];
+        if (!ray.intersectsCube) {
+          continue;
+        }
+        events.clear();
+        active.clear();
+        for (const std::size_t volumeIndex : candidates) {
+          const PreparedVolume &volume = prepared[volumeIndex];
+          if (x < volume.firstX || x > volume.lastX) {
             continue;
           }
           double minimum = ray.cubeMinimum;
           double maximum = ray.cubeMaximum;
           if (!intersectPlanes(
                   {volume.planeSet.planes.data(), volume.planeSet.count},
-                  origin, ray.direction, minimum, maximum)) {
+                  origin, ray.direction, minimum, maximum) ||
+              maximum - minimum <= 1.0e-9) {
             continue;
           }
-          const float contribution =
-              static_cast<float>(maximum - minimum) * volume.opacity;
-          red[index] += static_cast<float>(volume.color.red) * contribution;
-          green[index] += static_cast<float>(volume.color.green) * contribution;
-          blue[index] += static_cast<float>(volume.color.blue) * contribution;
-          weight[index] += contribution;
+          events.push_back({volumeIndex, minimum, true});
+          events.push_back({volumeIndex, maximum, false});
         }
+        if (events.empty()) {
+          const double thickness = ray.cubeMaximum - ray.cubeMinimum;
+          red[index] = static_cast<double>(skyColor.red) * thickness;
+          green[index] = static_cast<double>(skyColor.green) * thickness;
+          blue[index] = static_cast<double>(skyColor.blue) * thickness;
+          weight[index] = thickness;
+          continue;
+        }
+        std::ranges::sort(events, std::less{}, &VolumeEvent::position);
+
+        double pixelRed = 0.0;
+        double pixelGreen = 0.0;
+        double pixelBlue = 0.0;
+        double pixelWeight = 0.0;
+        const auto compositeSegment = [&](double minimum, double maximum) {
+          const double thickness = maximum - minimum;
+          if (thickness <= 1.0e-9) {
+            return;
+          }
+          const double midpoint = (minimum + maximum) * 0.5;
+          const Vec3 point = origin + ray.direction * midpoint;
+          std::size_t nearestOpaque = prepared.size();
+          double nearestOpaqueDepth = std::numeric_limits<double>::infinity();
+          for (const std::size_t volumeIndex : active) {
+            const PreparedVolume &volume = prepared[volumeIndex];
+            if (!volume.hasSourceDepth || volume.fluid) {
+              continue;
+            }
+            const double depth = sourceDepthAt(volume, point);
+            if (depth < nearestOpaqueDepth) {
+              nearestOpaqueDepth = depth;
+              nearestOpaque = volumeIndex;
+            }
+          }
+
+          double coveredOpacity = 0.0;
+          const auto addVolume = [&](const PreparedVolume &volume) {
+            const double contribution = thickness * volume.opacity;
+            pixelRed += static_cast<double>(volume.color.red) * contribution;
+            pixelGreen +=
+                static_cast<double>(volume.color.green) * contribution;
+            pixelBlue += static_cast<double>(volume.color.blue) * contribution;
+            pixelWeight += contribution;
+            coveredOpacity += volume.opacity;
+          };
+          for (const std::size_t volumeIndex : active) {
+            const PreparedVolume &volume = prepared[volumeIndex];
+            if (!volume.hasSourceDepth) {
+              addVolume(volume);
+              continue;
+            }
+            if (!volume.fluid) {
+              if (volumeIndex == nearestOpaque) {
+                addVolume(volume);
+              }
+              continue;
+            }
+            if (sourceDepthAt(volume, point) <= nearestOpaqueDepth + 1.0e-8) {
+              addVolume(volume);
+            }
+          }
+          const double skyContribution =
+              thickness * std::max(0.0, 1.0 - coveredOpacity);
+          pixelRed += static_cast<double>(skyColor.red) * skyContribution;
+          pixelGreen += static_cast<double>(skyColor.green) * skyContribution;
+          pixelBlue += static_cast<double>(skyColor.blue) * skyContribution;
+          pixelWeight += skyContribution;
+        };
+
+        double position = ray.cubeMinimum;
+        std::size_t eventIndex = 0U;
+        while (eventIndex < events.size() &&
+               events[eventIndex].position <= position + 1.0e-9) {
+          if (events[eventIndex].entering) {
+            active.push_back(events[eventIndex].volume);
+          }
+          ++eventIndex;
+        }
+        while (position < ray.cubeMaximum - 1.0e-9) {
+          const double next =
+              eventIndex < events.size()
+                  ? std::min(events[eventIndex].position, ray.cubeMaximum)
+                  : ray.cubeMaximum;
+          compositeSegment(position, next);
+          position = next;
+          const std::size_t groupBegin = eventIndex;
+          while (eventIndex < events.size() &&
+                 std::abs(events[eventIndex].position - position) <= 1.0e-9) {
+            ++eventIndex;
+          }
+          for (std::size_t event = groupBegin; event < eventIndex; ++event) {
+            if (events[event].entering) {
+              active.push_back(events[event].volume);
+              continue;
+            }
+            const auto found = std::ranges::find(active, events[event].volume);
+            if (found != active.end()) {
+              active.erase(found);
+            }
+          }
+          if (next >= ray.cubeMaximum) {
+            break;
+          }
+        }
+        red[index] = pixelRed;
+        green[index] = pixelGreen;
+        blue[index] = pixelBlue;
+        weight[index] = pixelWeight;
       }
     }
   };
@@ -468,14 +636,7 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
       image.rgba[index * 4U + 3U] = 0U;
       continue;
     }
-    const float cubeThickness =
-        static_cast<float>(rays[index].cubeMaximum - rays[index].cubeMinimum);
-    const float skyThickness = std::max(0.0F, cubeThickness - weight[index]);
-    red[index] += static_cast<float>(skyColor.red) * skyThickness;
-    green[index] += static_cast<float>(skyColor.green) * skyThickness;
-    blue[index] += static_cast<float>(skyColor.blue) * skyThickness;
-    weight[index] += skyThickness;
-    if (weight[index] <= 1.0e-6F) {
+    if (weight[index] <= 1.0e-6) {
       image.rgba[index * 4U + 3U] = 255U;
       continue;
     }
