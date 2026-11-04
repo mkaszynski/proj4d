@@ -374,6 +374,38 @@ void selectQuickSlot(InventoryState &inventory, PlayDimension mode,
   inventory.selectedQuick = static_cast<int>(visible[visibleIndex]);
 }
 
+bool enterFourDQuickDigit(InventoryState &inventory,
+                          FourDQuickSelectionState &selection, int digit,
+                          std::uint64_t nowMilliseconds) {
+  if (selection.pendingLayer >= 0 &&
+      nowMilliseconds <= selection.deadlineMilliseconds && digit >= 1 &&
+      digit <= fourDQuickLayerSlotCount) {
+    inventory.selectedQuick =
+        selection.pendingLayer * fourDQuickLayerSlotCount + digit - 1;
+    selection = {};
+    return true;
+  }
+
+  selection = {};
+  if (digit >= 1 && digit <= quickSide) {
+    selection.pendingLayer = digit - 1;
+    selection.deadlineMilliseconds =
+        nowMilliseconds + fourDQuickSequenceMilliseconds;
+  }
+  return false;
+}
+
+int activeFourDQuickLayer(const InventoryState &inventory,
+                          const FourDQuickSelectionState &selection,
+                          std::uint64_t nowMilliseconds) {
+  if (selection.pendingLayer >= 0 &&
+      nowMilliseconds <= selection.deadlineMilliseconds) {
+    return selection.pendingLayer;
+  }
+  return std::clamp(inventory.selectedQuick, 0, quickSlotCount - 1) /
+         fourDQuickLayerSlotCount;
+}
+
 void clickStack(ItemStack &slot, ItemStack &cursor, int mouseButton) {
   slot = normalizedStack(slot);
   cursor = normalizedStack(cursor);

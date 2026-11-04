@@ -25,4 +25,32 @@ MouseMotionMapping mapMouseMotion(double horizontalPixels,
   return {horizontalTurn, 0.0, verticalTurn, 0.0, 0.0};
 }
 
+void beginInventoryRightGesture(InventoryRightGesture &gesture, int x, int y) {
+  gesture = {x, y, true, false};
+}
+
+bool updateInventoryRightGesture(InventoryRightGesture &gesture, int x, int y) {
+  if (!gesture.pressed) {
+    return false;
+  }
+  const long long horizontal = static_cast<long long>(x) - gesture.pressX;
+  const long long vertical = static_cast<long long>(y) - gesture.pressY;
+  constexpr long long thresholdSquared =
+      inventoryRightDragThresholdPixels * inventoryRightDragThresholdPixels;
+  if (horizontal * horizontal + vertical * vertical >= thresholdSquared) {
+    gesture.dragging = true;
+  }
+  return gesture.dragging;
+}
+
+bool finishInventoryRightGesture(InventoryRightGesture &gesture) {
+  const bool clicked = gesture.pressed && !gesture.dragging;
+  gesture = {};
+  return clicked;
+}
+
+void cancelInventoryRightGesture(InventoryRightGesture &gesture) {
+  gesture = {};
+}
+
 } // namespace proj4d

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <vector>
 
@@ -33,6 +34,8 @@ inline constexpr int storageSide = 4;
 inline constexpr int storageSlotCount = storageSide * storageSide * storageSide;
 inline constexpr int quickSide = 3;
 inline constexpr int quickSlotCount = quickSide * quickSide * quickSide;
+inline constexpr int fourDQuickLayerSlotCount = quickSide * quickSide;
+inline constexpr std::uint64_t fourDQuickSequenceMilliseconds = 600U;
 inline constexpr int handCraftSide = 2;
 inline constexpr int handCraftSlotCount =
     handCraftSide * handCraftSide * handCraftSide;
@@ -47,6 +50,11 @@ struct InventoryState {
   std::array<ItemStack, tableCraftSlotCount> tableCrafting{};
   ItemStack cursor{};
   int selectedQuick{};
+};
+
+struct FourDQuickSelectionState {
+  int pendingLayer{-1};
+  std::uint64_t deadlineMilliseconds{};
 };
 
 [[nodiscard]] ItemStack normalizedStack(ItemStack stack);
@@ -71,6 +79,14 @@ craftingSlots(const InventoryState &inventory, CraftingStation station);
                                       int amount = 1);
 void selectQuickSlot(InventoryState &inventory, PlayDimension mode,
                      int visibleIndex);
+[[nodiscard]] bool enterFourDQuickDigit(InventoryState &inventory,
+                                        FourDQuickSelectionState &selection,
+                                        int digit,
+                                        std::uint64_t nowMilliseconds);
+[[nodiscard]] int
+activeFourDQuickLayer(const InventoryState &inventory,
+                      const FourDQuickSelectionState &selection,
+                      std::uint64_t nowMilliseconds);
 void clickStack(ItemStack &slot, ItemStack &cursor, int mouseButton);
 
 } // namespace proj4d

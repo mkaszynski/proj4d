@@ -225,6 +225,53 @@ void testMouseMovementTurnsInOrdinaryAndFourthDimensions() {
   expect(proj4d::selectMouseMotionMode(true, true) ==
              proj4d::MouseMotionMode::VisionCubeOrbit,
          "Ctrl takes priority over Tab for mouse control");
+
+  proj4d::InventoryRightGesture gesture;
+  proj4d::beginInventoryRightGesture(gesture, 100, 100);
+  expect(!proj4d::updateInventoryRightGesture(gesture, 103, 103) &&
+             proj4d::finishInventoryRightGesture(gesture),
+         "small right-click pointer jitter remains a normal inventory click");
+  proj4d::beginInventoryRightGesture(gesture, 100, 100);
+  expect(proj4d::updateInventoryRightGesture(
+             gesture, 100 + proj4d::inventoryRightDragThresholdPixels, 100) &&
+             !proj4d::finishInventoryRightGesture(gesture),
+         "crossing the right-drag threshold rotates without also clicking");
+  proj4d::beginInventoryRightGesture(gesture, 100, 100);
+  proj4d::cancelInventoryRightGesture(gesture);
+  expect(!proj4d::finishInventoryRightGesture(gesture),
+         "closing the inventory cancels an unfinished right gesture");
+}
+
+void testFourDimensionalQuickSelection() {
+  proj4d::InventoryState inventory;
+  proj4d::FourDQuickSelectionState selection;
+  expect(!proj4d::enterFourDQuickDigit(inventory, selection, 2, 1000U) &&
+             proj4d::activeFourDQuickLayer(inventory, selection, 1200U) == 1,
+         "the first rapid digit previews one of the three 4D hotbar layers");
+  expect(proj4d::enterFourDQuickDigit(inventory, selection, 5, 1500U) &&
+             inventory.selectedQuick == 13,
+         "the second rapid digit selects a cell in the pending 3 by 3 layer");
+
+  expect(!proj4d::enterFourDQuickDigit(inventory, selection, 3, 2000U) &&
+             !proj4d::enterFourDQuickDigit(
+                 inventory, selection, 9,
+                 2000U + proj4d::fourDQuickSequenceMilliseconds + 1U) &&
+             inventory.selectedQuick == 13 && selection.pendingLayer < 0,
+         "an expired two-digit sequence cannot unexpectedly change a slot");
+
+  std::uint64_t time = 4000U;
+  for (int layer = 1; layer <= proj4d::quickSide; ++layer) {
+    for (int slot = 1; slot <= proj4d::fourDQuickLayerSlotCount; ++slot) {
+      selection = {};
+      expect(
+          !proj4d::enterFourDQuickDigit(inventory, selection, layer, time++) &&
+              proj4d::enterFourDQuickDigit(inventory, selection, slot,
+                                           time++) &&
+              inventory.selectedQuick ==
+                  (layer - 1) * proj4d::fourDQuickLayerSlotCount + slot - 1,
+          "every canonical 4D quick slot is reachable by layer and cell");
+    }
+  }
 }
 
 void testCameraProvidesTwoOrthogonalSidewaysDirections() {
@@ -1534,6 +1581,17 @@ void testDimensionNativeInventoryCraftingAndGameplay() {
                  64U,
          "2D, 3D, and 4D expose line, plane, and volume inventory slices");
 
+  proj4d::ItemStack rightClicked =
+      proj4d::normalizedStack({proj4d::BlockId::dirt, 5});
+  proj4d::ItemStack rightCursor;
+  proj4d::clickStack(rightClicked, rightCursor, 3);
+  expect(rightClicked.count == 2 && rightCursor.count == 3,
+         "a non-dragged inventory right click still splits a stack");
+  proj4d::ItemStack emptySlot;
+  proj4d::clickStack(emptySlot, rightCursor, 3);
+  expect(emptySlot.count == 1 && rightCursor.count == 2,
+         "a non-dragged inventory right click still places one item");
+
   for (const proj4d::PlayDimension dimension :
        {proj4d::PlayDimension::Two, proj4d::PlayDimension::Three,
         proj4d::PlayDimension::Four}) {
@@ -1994,6 +2052,7 @@ int main() {
     testVerticalLookStopsAtStraightUpAndDown();
     testHorizontalLookKeepsTheViewLevel();
     testMouseMovementTurnsInOrdinaryAndFourthDimensions();
+    testFourDimensionalQuickSelection();
     testCameraProvidesTwoOrthogonalSidewaysDirections();
     testViewStatusReportsFourCoordinatesAndThreeAngles();
     testGroundedPlayerCanMoveWithoutJumping();
