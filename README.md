@@ -204,12 +204,17 @@ In the first menu, use the arrow keys and `Enter`, press `4`, `3`, or `2`, or
 click a dimension. In the terrain menu, use the arrow keys and `Enter`, press
 `F`, `L`, or `H`, or click a choice. `N` is retained as an alias for High.
 
-In every play mode, `T` opens/closes hand inventory and crafting, number keys
-select visible quick-storage slots, and `Escape` closes an open inventory before
-quitting. Left click mines with the selected tool. Right click places the
-selected block, or opens table crafting when aimed at a crafting table. In an
-inventory, left click moves/merges stacks and right click splits them (the 4D
-inventory reserves right-drag for rotating its slot cube).
+In every play mode, `T` opens/closes hand inventory and crafting, the documented
+number-key mapping selects quick-storage slots, and `Escape` closes an open
+inventory before quitting. Left click mines with the selected tool. Right click
+places the selected block, or opens table crafting when aimed at a crafting
+table. In an inventory, left click moves/merges stacks and right click splits
+them (the 4D inventory reserves right-drag for rotating its slot cube).
+
+Hovering over any occupied inventory, crafting, output, or quick-storage slot
+shows its Hypercraft item name. In the 4D inventory, a right press becomes the
+usual split/place-one click when released without moving; moving at least five
+pixels turns the same gesture into cube rotation and suppresses the item click.
 
 ### 4D mode
 
@@ -227,7 +232,7 @@ inventory reserves right-drag for rotating its slot cube).
 | Hold `Ctrl` + mouse | Orbit the solid 3D vision cube without changing the 4D view |
 | Mouse wheel | Zoom the external view of the vision cube |
 | `T` | Open the rotatable 3D inventory/crafting cube |
-| `1`–`9` | Select a visible quick slot |
+| Rapid `1`–`3`, then `1`–`9` | Select a depth layer and cell in the 3×3×3 quick-storage volume |
 | Left mouse button | Mine the targeted tesseract |
 | Right mouse button | Place beside the target or use a crafting table; rotate the open inventory while dragging |
 | `Escape` | Close inventory, then quit |
@@ -235,6 +240,9 @@ inventory reserves right-drag for rotating its slot cube).
 The red, green, and blue arms at the center form the 3D crosshair. The status
 bar shows `X`, `Y`, `Z`, and `W` coordinates and the ordinary horizontal (`H`),
 vertical (`V`), and fourth-dimensional (`4D`) view angles.
+The 4D hotbar displays the active layer as a square 3×3 grid. The first digit
+chooses one of its three depth layers and the second chooses the numbered cell;
+the second key must arrive within 600 milliseconds.
 
 ### 3D mode
 
@@ -314,7 +322,8 @@ descend. Fluids do not flow and do not collide with the player.
   corruption rejection, exact pinned-Hypercraft terrain parity, material
   colors, dimensional inventories and recipes, tools, clouds, negative
   coordinates, infinite depth, bounded caches, occlusion, movement, sneaking,
-  jumping, fluid transparency and swimming, targeting, mining, and placement.
+  jumping, fluid transparency and swimming, inventory gestures, 4D quick-slot
+  sequences, targeting, mining, and placement.
 
 See the repository's
 [Proj4D development skill](.codex/skills/proj4d-development-guardrails/SKILL.md)

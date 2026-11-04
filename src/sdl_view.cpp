@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -691,6 +692,38 @@ const ItemStack &stackForUiSlot(const InventoryState &inventory,
   return outputStack;
 }
 
+std::string inventoryItemLabel(BlockId item) {
+  std::string label(blockName(item));
+  std::ranges::transform(label, label.begin(), [](unsigned char character) {
+    return static_cast<char>(std::toupper(character));
+  });
+  return label;
+}
+
+void drawInventoryTooltip(SDL_Renderer *renderer, const ItemStack &stack,
+                          int mouseX, int mouseY, int width, int height) {
+  if (stack.empty()) {
+    return;
+  }
+  const std::string label = inventoryItemLabel(stack.item);
+  constexpr int scale = 1;
+  constexpr int padding = 5;
+  const int textWidth = std::max(1, static_cast<int>(label.size()) * 6 - 1);
+  const int tooltipWidth = textWidth + padding * 2;
+  const int tooltipHeight = 7 * scale + padding * 2;
+  const int left =
+      std::clamp(mouseX + 14, 0, std::max(0, width - tooltipWidth));
+  const int top =
+      std::clamp(mouseY + 18, 0, std::max(0, height - tooltipHeight));
+  const SDL_Rect tooltip{left, top, tooltipWidth, tooltipHeight};
+  SDL_SetRenderDrawColor(renderer, 5, 9, 15, 242);
+  SDL_RenderFillRect(renderer, &tooltip);
+  SDL_SetRenderDrawColor(renderer, 121, 149, 181, 255);
+  SDL_RenderDrawRect(renderer, &tooltip);
+  drawBitmapText(renderer, label, left + padding, top + padding, scale,
+                 {238, 245, 252});
+}
+
 void drawInventorySlot(SDL_Renderer *renderer, const InventoryUiSlot &slot,
                        const ItemStack &stack, PlayDimension dimension,
                        bool selected) {
@@ -780,13 +813,33 @@ void drawInventoryOverlay(SDL_Renderer *renderer,
   int mouseX = 0;
   int mouseY = 0;
   SDL_GetMouseState(&mouseX, &mouseY);
+  const SDL_Point mousePoint{mouseX, mouseY};
+  const ItemStack *hoveredStack = nullptr;
+  for (auto slot = slots.rbegin(); slot != slots.rend(); ++slot) {
+    if (SDL_PointInRect(&mousePoint, &slot->rectangle) == SDL_FALSE) {
+      continue;
+    }
+    const ItemStack &stack =
+        stackForUiSlot(inventory, *slot, ui.station, outputStack);
+    if (!stack.empty()) {
+      hoveredStack = &stack;
+    }
+    break;
+  }
   if (!inventory.cursor.empty()) {
     const InventoryUiSlot cursorSlot{
         InventoryUiArea::Storage, 0U, {mouseX - 12, mouseY - 12, 24, 24}};
     drawInventorySlot(renderer, cursorSlot, inventory.cursor, dimension, false);
   }
-  drawCenteredBitmapText(renderer, "T CLOSE  RIGHT DRAG ROTATES 4D", width / 2,
-                         panel.y + panel.h - 28, 1, {139, 160, 181});
+  if (hoveredStack != nullptr) {
+    drawInventoryTooltip(renderer, *hoveredStack, mouseX, mouseY, width,
+                         height);
+  }
+  drawCenteredBitmapText(renderer,
+                         dimension == PlayDimension::Four
+                             ? "T CLOSE  RIGHT CLICK ITEMS  RIGHT DRAG ROTATES"
+                             : "T CLOSE  LEFT AND RIGHT CLICK ITEMS",
+                         width / 2, panel.y + panel.h - 28, 1, {139, 160, 181});
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
@@ -823,15 +876,61 @@ bool applyInventoryUiClick(GameSession &game, PlayDimension dimension,
   return false;
 }
 
+void pointAtInventorySmokeItem(SDL_Window *window, SDL_Renderer *renderer,
+                               const InventoryState &inventory,
+                               PlayDimension dimension,
+                               const InventoryUiState &ui) {
+  int width = 1;
+  int height = 1;
+  SDL_GetRendererOutputSize(renderer, &width, &height);
+  std::vector<InventoryUiSlot> slots =
+      inventoryUiSlots(dimension, ui.station, ui, width, height);
+  std::ranges::sort(slots, std::greater{}, &InventoryUiSlot::depth);
+  const ItemStack outputStack =
+      craftingOutput(inventory, dimension, ui.station);
+  for (const InventoryUiSlot &slot : slots) {
+    if (stackForUiSlot(inventory, slot, ui.station, outputStack).empty()) {
+      continue;
+    }
+    SDL_WarpMouseInWindow(window, slot.rectangle.x + slot.rectangle.w / 2,
+                          slot.rectangle.y + slot.rectangle.h / 2);
+    return;
+  }
+}
+
 void drawQuickStorage(SDL_Renderer *renderer, const InventoryState &inventory,
-                      PlayDimension dimension, int width, int height) {
-  const std::vector<std::size_t> visible = visibleQuickSlots(dimension);
-  const int size = dimension == PlayDimension::Four ? 18 : 30;
+                      PlayDimension dimension, int width, int height,
+                      int fourDLayer = -1, bool awaitingFourDSlot = false) {
+  std::vector<std::size_t> visible = visibleQuickSlots(dimension);
+  if (dimension == PlayDimension::Four) {
+    fourDLayer =
+        std::clamp(fourDLayer >= 0 ? fourDLayer
+                                   : std::clamp(inventory.selectedQuick, 0,
+                                                quickSlotCount - 1) /
+                                         fourDQuickLayerSlotCount,
+                   0, quickSide - 1);
+    visible.clear();
+    visible.reserve(fourDQuickLayerSlotCount);
+    const std::size_t first =
+        static_cast<std::size_t>(fourDLayer * fourDQuickLayerSlotCount);
+    for (int slot = 0; slot < fourDQuickLayerSlotCount; ++slot) {
+      visible.push_back(first + static_cast<std::size_t>(slot));
+    }
+  }
+  const int size = dimension == PlayDimension::Four ? 24 : 30;
   const int shown = static_cast<int>(visible.size());
-  const int columns = dimension == PlayDimension::Four ? 9 : shown;
+  const int columns = dimension == PlayDimension::Four ? quickSide : shown;
   const int rows = (shown + columns - 1) / columns;
   const int left = (width - columns * size) / 2;
   const int top = height - rows * size - 14;
+  if (dimension == PlayDimension::Four) {
+    const std::string prompt =
+        awaitingFourDSlot
+            ? "LAYER " + std::to_string(fourDLayer + 1) + "  PRESS 1-9"
+            : "PRESS 1-3 THEN 1-9";
+    drawCenteredBitmapText(renderer, prompt, width / 2, top - 13, 1,
+                           {224, 236, 248});
+  }
   for (int visibleIndex = 0; visibleIndex < shown; ++visibleIndex) {
     const std::size_t index = visible[static_cast<std::size_t>(visibleIndex)];
     const InventoryUiSlot slot{InventoryUiArea::Quick,
@@ -841,6 +940,12 @@ void drawQuickStorage(SDL_Renderer *renderer, const InventoryState &inventory,
                                 size - 2}};
     drawInventorySlot(renderer, slot, inventory.quick[index], dimension,
                       static_cast<int>(index) == inventory.selectedQuick);
+    if (dimension == PlayDimension::Four) {
+      drawBitmapText(renderer, std::to_string(visibleIndex + 1),
+                     slot.rectangle.x + slot.rectangle.w - 6,
+                     slot.rectangle.y + slot.rectangle.h - 8, 1,
+                     {235, 242, 250});
+    }
   }
 }
 
@@ -1821,6 +1926,8 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
     preview.quick[1] = normalizedStack({BlockId::planks, 24});
     preview.handCrafting[0] = normalizedStack({BlockId::wood, 1});
     game.replaceInventory(std::move(preview));
+    pointAtInventorySmokeItem(window, renderer, game.inventory(),
+                              PlayDimension::Three, inventoryUi);
   }
   bool running = true;
   bool miningHeld = false;
@@ -2047,6 +2154,8 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
         {BlockId::stone_tool, 1, maximumDurability(BlockId::stone_tool)});
     preview.handCrafting[0] = normalizedStack({BlockId::wood, 1});
     game.replaceInventory(std::move(preview));
+    pointAtInventorySmokeItem(window, renderer, game.inventory(),
+                              PlayDimension::Two, inventoryUi);
   }
   bool running = true;
   bool miningHeld = false;
@@ -2406,6 +2515,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   DisplayCamera display;
   FeatureGeometryCache geometryCache;
   InventoryUiState inventoryUi;
+  InventoryRightGesture inventoryRightGesture;
+  FourDQuickSelectionState quickSelection;
   if (mode == RunMode::FourDInventorySmokeTest) {
     inventoryUi.open = true;
     InventoryState preview;
@@ -2418,6 +2529,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
     preview.quick[13] = normalizedStack({BlockId::planks, 24});
     preview.handCrafting[0] = normalizedStack({BlockId::wood, 1});
     game.replaceInventory(std::move(preview));
+    pointAtInventorySmokeItem(window, renderer, game.inventory(),
+                              PlayDimension::Four, inventoryUi);
   }
   PlayerMotionState playerMotion{0.0, true, spawnPosition};
   bool running = true;
@@ -2439,8 +2552,11 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
               << "  Hold Tab + mouse up/down: vertical look\n"
               << "  Hold Ctrl + mouse: orbit the solid 3D vision cube\n"
               << "  Mouse wheel: zoom the vision cube\n"
+              << "  1-3 then 1-9 rapidly: select a 4D hotbar layer and slot\n"
               << "  Left click: break a targeted tesseract\n"
               << "  Right click: build a tesseract\n"
+              << "  Inventory right click: split/place one item\n"
+              << "  Inventory right drag: rotate the inventory cube\n"
               << "  Escape: quit\n";
   }
 
@@ -2461,6 +2577,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                  event.key.keysym.sym == SDLK_ESCAPE) {
         if (inventoryUi.open) {
           inventoryUi.open = false;
+          cancelInventoryRightGesture(inventoryRightGesture);
           SDL_SetRelativeMouseMode(smokeTest ? SDL_FALSE : SDL_TRUE);
         } else {
           running = false;
@@ -2469,17 +2586,23 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                  event.key.repeat == 0) {
         inventoryUi.open = !inventoryUi.open;
         inventoryUi.station = CraftingStation::Hand;
+        cancelInventoryRightGesture(inventoryRightGesture);
         SDL_SetRelativeMouseMode(inventoryUi.open || smokeTest ? SDL_FALSE
                                                                : SDL_TRUE);
       } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym >= SDLK_1 &&
-                 event.key.keysym.sym <= SDLK_9) {
+                 event.key.keysym.sym <= SDLK_9 && event.key.repeat == 0) {
         InventoryState changed = game.inventory();
-        selectQuickSlot(changed, PlayDimension::Four,
-                        static_cast<int>(event.key.keysym.sym - SDLK_1));
-        game.replaceInventory(std::move(changed));
+        if (enterFourDQuickDigit(
+                changed, quickSelection,
+                static_cast<int>(event.key.keysym.sym - SDLK_0),
+                static_cast<std::uint64_t>(event.key.timestamp))) {
+          game.replaceInventory(std::move(changed));
+        }
       } else if (event.type == SDL_MOUSEMOTION && !smokeTest) {
         if (inventoryUi.open) {
-          if ((event.motion.state & SDL_BUTTON_RMASK) != 0U) {
+          if ((event.motion.state & SDL_BUTTON_RMASK) != 0U &&
+              updateInventoryRightGesture(inventoryRightGesture, event.motion.x,
+                                          event.motion.y)) {
             inventoryUi.yaw += static_cast<double>(event.motion.xrel) * 0.008;
             inventoryUi.pitch =
                 std::clamp(inventoryUi.pitch +
@@ -2511,7 +2634,10 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
           int width = 1;
           int height = 1;
           SDL_GetRendererOutputSize(renderer, &width, &height);
-          if (event.button.button != SDL_BUTTON_RIGHT) {
+          if (event.button.button == SDL_BUTTON_RIGHT) {
+            beginInventoryRightGesture(inventoryRightGesture, event.button.x,
+                                       event.button.y);
+          } else {
             if (applyInventoryUiClick(game, PlayDimension::Four, inventoryUi,
                                       width, height, event.button.x,
                                       event.button.y, event.button.button) &&
@@ -2537,6 +2663,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
             if (world.blockAt(hit->block) == BlockId::crafting_table) {
               inventoryUi.open = true;
               inventoryUi.station = CraftingStation::Table;
+              cancelInventoryRightGesture(inventoryRightGesture);
               SDL_SetRelativeMouseMode(SDL_FALSE);
               continue;
             }
@@ -2545,6 +2672,21 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
         }
         if (worldChanged && persistence) {
           static_cast<void>(persistChangedWorld(game, *persistence));
+        }
+      } else if (event.type == SDL_MOUSEBUTTONUP && inventoryUi.open &&
+                 event.button.button == SDL_BUTTON_RIGHT) {
+        const int clickX = inventoryRightGesture.pressX;
+        const int clickY = inventoryRightGesture.pressY;
+        if (finishInventoryRightGesture(inventoryRightGesture)) {
+          int width = 1;
+          int height = 1;
+          SDL_GetRendererOutputSize(renderer, &width, &height);
+          if (applyInventoryUiClick(game, PlayDimension::Four, inventoryUi,
+                                    width, height, clickX, clickY,
+                                    SDL_BUTTON_RIGHT) &&
+              persistence) {
+            static_cast<void>(persistChangedWorld(game, *persistence));
+          }
         }
       } else if (event.type == SDL_MOUSEBUTTONUP &&
                  event.button.button == SDL_BUTTON_LEFT) {
@@ -2583,8 +2725,15 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
     int height = initialHeight;
     SDL_GetRendererOutputSize(renderer, &width, &height);
     render(renderer, world, camera, display, width, height, geometryCache);
+    const std::uint64_t nowMilliseconds = SDL_GetTicks();
+    const bool awaitingQuickSlot =
+        quickSelection.pendingLayer >= 0 &&
+        nowMilliseconds <= quickSelection.deadlineMilliseconds;
     drawQuickStorage(renderer, game.inventory(), PlayDimension::Four, width,
-                     height);
+                     height,
+                     activeFourDQuickLayer(game.inventory(), quickSelection,
+                                           nowMilliseconds),
+                     awaitingQuickSlot);
     if (inventoryUi.open) {
       drawInventoryOverlay(renderer, game.inventory(), PlayDimension::Four,
                            inventoryUi, width, height);

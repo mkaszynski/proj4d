@@ -178,6 +178,16 @@ Apply these invariants to every change in the Proj4D repository.
   complete volume in 4D, centered plane in 3D, and centered line in 2D. Drops
   collected in a lower-dimensional mode must enter slots visible in that mode;
   hidden higher-dimensional slots remain intact and accessible in 4D.
+- Keep the 4D quick-storage volume at `3x3x3`, but display its active layer as
+  a square `3x3` hotbar. Select all 27 slots with a bounded two-key sequence:
+  `1`-`3` chooses the depth layer and `1`-`9` chooses its numbered cell within
+  600 milliseconds. Show the pending layer instead of making the sequence
+  invisible.
+- Show the Hypercraft display name when hovering any occupied inventory,
+  crafting, output, or quick-storage slot. In the rotatable 4D inventory,
+  preserve normal right-click stack splitting and single-item placement when
+  the pointer stays below the drag threshold; once the threshold is crossed,
+  rotate the cube and suppress that click.
 - Keep crafting dimension-native: a line in 2D, conventional plane in 3D, and
   volume in 4D. Lower-dimensional patterns must match their displayed centered
   slice, accept translated patterns where they fit, consume ingredients
