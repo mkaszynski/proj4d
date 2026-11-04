@@ -1826,6 +1826,107 @@ void testAveragedFourDimensionalVolumeColor() {
   }
   expect(foundClippedMaterial,
          "the clipped close face remains compositable as a convex volume");
+
+  proj4d::Camera4D depthCamera;
+  depthCamera.position = {0.5, 0.5, -2.0, 0.5};
+  const proj4d::VisibleBoundaryCell4D nearOpaque{
+      {0, 0, 0, 0}, 2, -1, proj4d::BlockId::stone};
+  const proj4d::VisibleBoundaryCell4D farOpaque{
+      {0, 0, 2, 0}, 2, -1, proj4d::BlockId::grass};
+  const auto nearOnlyVolumes =
+      proj4d::projectBoundaryVolumes4D(std::array{nearOpaque}, depthCamera);
+  const auto alignedVolumes = proj4d::projectBoundaryVolumes4D(
+      std::array{nearOpaque, farOpaque}, depthCamera);
+  const auto nearOnlyImage = proj4d::renderAveragedVolume4D(
+      nearOnlyVolumes, {0.0, 0.0, 3.8}, 65, 65, 65);
+  const auto alignedImage = proj4d::renderAveragedVolume4D(
+      alignedVolumes, {0.0, 0.0, 3.8}, 65, 65, 65);
+  const auto differingBeyondRounding = [](const auto &left, const auto &right) {
+    std::size_t differingChannels = 0U;
+    for (std::size_t index = 0; index < left.rgba.size(); ++index) {
+      differingChannels += std::abs(static_cast<int>(left.rgba[index]) -
+                                    static_cast<int>(right.rgba[index])) > 1
+                               ? 1U
+                               : 0U;
+    }
+    return differingChannels;
+  };
+  expect(differingBeyondRounding(alignedImage, nearOnlyImage) == 0U,
+         "an aligned opaque 4D boundary completely covers every farther "
+         "projected segment");
+
+  for (int sourceAxis = 0; sourceAxis < 4; ++sourceAxis) {
+    proj4d::Camera4D axisCamera;
+    axisCamera.position = {0.5, 0.5, 0.5, 0.5};
+    axisCamera.position[static_cast<std::size_t>(sourceAxis)] = -2.0;
+    axisCamera.forward = {};
+    axisCamera.forward[static_cast<std::size_t>(sourceAxis)] = 1.0;
+    std::array<int, 3> tangentAxes{};
+    int tangentIndex = 0;
+    for (int candidate = 0; candidate < 4; ++candidate) {
+      if (candidate != sourceAxis) {
+        tangentAxes[static_cast<std::size_t>(tangentIndex++)] = candidate;
+      }
+    }
+    axisCamera.imageX = {};
+    axisCamera.imageY = {};
+    axisCamera.imageZ = {};
+    axisCamera.imageX[static_cast<std::size_t>(tangentAxes[0])] = 1.0;
+    axisCamera.imageY[static_cast<std::size_t>(tangentAxes[1])] = 1.0;
+    axisCamera.imageZ[static_cast<std::size_t>(tangentAxes[2])] = 1.0;
+    proj4d::BlockCoord axisNearBlock{};
+    proj4d::BlockCoord axisFarBlock{};
+    axisFarBlock[static_cast<std::size_t>(sourceAxis)] = 2;
+    const proj4d::VisibleBoundaryCell4D axisNear{axisNearBlock, sourceAxis, -1,
+                                                 proj4d::BlockId::stone};
+    const proj4d::VisibleBoundaryCell4D axisFar{axisFarBlock, sourceAxis, -1,
+                                                proj4d::BlockId::grass};
+    const auto axisNearVolumes =
+        proj4d::projectBoundaryVolumes4D(std::array{axisNear}, axisCamera);
+    const auto axisCoveredVolumes = proj4d::projectBoundaryVolumes4D(
+        std::array{axisFar, axisNear}, axisCamera);
+    const auto axisCoveredImage = proj4d::renderAveragedVolume4D(
+        axisCoveredVolumes, {0.0, 0.0, 3.8}, 33, 33, 33);
+    const auto axisNearImage = proj4d::renderAveragedVolume4D(
+        axisNearVolumes, {0.0, 0.0, 3.8}, 33, 33, 33);
+    const std::size_t differingChannels =
+        differingBeyondRounding(axisCoveredImage, axisNearImage);
+    expect(differingChannels == 0U,
+           "opaque source-depth coverage works for 4D face axis " +
+               std::to_string(sourceAxis) + " (different channels " +
+               std::to_string(differingChannels) + ")");
+  }
+
+  const auto reversedAligned = proj4d::projectBoundaryVolumes4D(
+      std::array{farOpaque, nearOpaque}, depthCamera);
+  expect(proj4d::renderAveragedVolume4D(reversedAligned, {0.0, 0.0, 3.8}, 65,
+                                        65, 65)
+                 .rgba == alignedImage.rgba,
+         "opaque 4D coverage is independent of boundary extraction order");
+
+  const proj4d::VisibleBoundaryCell4D offsetFar{
+      {1, 0, 2, 0}, 2, -1, proj4d::BlockId::grass};
+  const auto partialCoverage = proj4d::projectBoundaryVolumes4D(
+      std::array{nearOpaque, offsetFar}, depthCamera);
+  expect(proj4d::renderAveragedVolume4D(partialCoverage, {0.0, 0.0, 3.8}, 65,
+                                        65, 65)
+                 .rgba != nearOnlyImage.rgba,
+         "a farther 4D boundary remains visible only outside the nearer "
+         "opaque silhouette");
+
+  const proj4d::VisibleBoundaryCell4D nearWater{
+      {0, 0, 0, 0}, 2, -1, proj4d::BlockId::water};
+  const auto waterOnlyVolumes =
+      proj4d::projectBoundaryVolumes4D(std::array{nearWater}, depthCamera);
+  const auto waterOverOpaque = proj4d::projectBoundaryVolumes4D(
+      std::array{nearWater, farOpaque}, depthCamera);
+  expect(proj4d::renderAveragedVolume4D(waterOverOpaque, {0.0, 0.0, 3.8}, 65,
+                                        65, 65)
+                 .rgba != proj4d::renderAveragedVolume4D(
+                              waterOnlyVolumes, {0.0, 0.0, 3.8}, 65, 65, 65)
+                              .rgba,
+         "transparent 4D fluid still reveals an opaque source surface "
+         "behind it");
 }
 
 void testCloudsUseSharedDimensionalSlices() {

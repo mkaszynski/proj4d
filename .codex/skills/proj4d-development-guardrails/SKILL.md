@@ -52,6 +52,12 @@ Apply these invariants to every change in the Proj4D repository.
   weight empty in-cube length as blue sky, keep rays outside the cube black, and
   keep the result order independent. Never replace this with fixed-step
   traversal through the infinite world.
+- Resolve overlapping 4D boundary volumes by reconstructing their exact source
+  depth from the projected boundary plane. On every analytical display-ray
+  interval, include only the nearest opaque source surface, include translucent
+  fluids no farther than that surface, and exclude every opaque-covered surface
+  before applying the external vision-cube path average. Do not restore naive
+  accumulation of buried faces or extraction-order-dependent painter sorting.
 - Cache the filled projection until its camera, display-cube transform, visible
   topology, world revision, or target size changes. Keep its internal image
   resolution, projected-volume count, and per-volume pixel bounds explicit.

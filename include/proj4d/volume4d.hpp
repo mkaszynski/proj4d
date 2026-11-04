@@ -21,6 +21,10 @@ struct ProjectedBoundaryVolume4D {
   bool canonicalCube{true};
   BlockId material{BlockId::stone};
   int brightnessPercent{100};
+  double sourceDepthNumerator{};
+  double sourceDepthDenominatorConstant{};
+  Vec3 sourceDepthDenominatorGradient{};
+  bool hasSourceDepth{};
 };
 
 struct AveragedVolumeImage {
@@ -33,6 +37,9 @@ inline constexpr int maximumVolumeImageWidth = 160;
 inline constexpr int maximumProjectedBoundaryVolumes = 8192;
 
 [[nodiscard]] int boundaryBrightnessPercent4D(int axis, int side);
+void setProjectedSourcePlane4D(ProjectedBoundaryVolume4D &volume,
+                               const Camera4D &camera, int axis,
+                               double planeCoordinate);
 
 [[nodiscard]] std::vector<ProjectedBoundaryVolume4D>
 projectBoundaryVolumes4D(std::span<const VisibleBoundaryCell4D> cells,
