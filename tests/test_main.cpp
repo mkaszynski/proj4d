@@ -27,6 +27,7 @@
 #include "proj4d/render3d.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/terrain_generator.hpp"
+#include "proj4d/texture_atlas.hpp"
 #include "proj4d/view_status.hpp"
 #include "proj4d/volume4d.hpp"
 #include "proj4d/world.hpp"
@@ -862,28 +863,22 @@ void testThreeDimensionalProjectionAndVisibleFaces() {
          "nearest visible X face is red and hides farther cubes");
   expect(proj4d::visionFaceColors3D[0][0] > proj4d::visionFaceColors3D[0][1],
          "X-perpendicular cube faces use the red palette");
-  int darkestShade = 100;
-  int brightestShade = 100;
   for (int z = -4; z <= 4; ++z) {
     for (int y = -4; y <= 4; ++y) {
       for (int x = -4; x <= 4; ++x) {
         const proj4d::BlockCoord3D block{x, y, z};
         const int shade = proj4d::blockBrightnessPercent3D(block);
-        darkestShade = std::min(darkestShade, shade);
-        brightestShade = std::max(brightestShade, shade);
-        expect(shade == proj4d::blockBrightnessPercent3D(block),
-               "a 3D cube's color variation stays deterministic");
+        expect(shade == 100,
+               "3D textures no longer receive per-block brightness noise");
       }
     }
   }
-  expect(darkestShade < 90 && brightestShade > 110,
-         "3D cubes visibly include darker and brighter color variations");
   const auto shadedRed = proj4d::visionBlockColor3D(0, {7, -3, 4});
   const auto shadedGreen = proj4d::visionBlockColor3D(1, {7, -3, 4});
   const auto shadedBlue = proj4d::visionBlockColor3D(2, {7, -3, 4});
   expect(shadedRed[0] > shadedRed[1] && shadedGreen[1] > shadedGreen[0] &&
              shadedBlue[2] > shadedBlue[0],
-         "per-cube shading preserves red X, green Y, and blue Z identities");
+         "the legacy axis palette remains stable without per-block shading");
   expect(proj4d::buildCubeSelectionWireframe3D({0, 100, 0}, xCamera, 16.0 / 9.0)
                  .size() == 12U,
          "a selected cube receives all twelve white wireframe edges");
@@ -1135,23 +1130,17 @@ void testTrueTwoDimensionalProjection() {
              proj4d::visionAxisColors2D[1][0] >
                  proj4d::visionAxisColors2D[1][1],
          "2D colors are reversed so X is green and Y is red");
-  int darkestShade = 100;
-  int brightestShade = 100;
   for (int y = -4; y <= 4; ++y) {
     for (int x = -4; x <= 4; ++x) {
       const int shade = proj4d::blockBrightnessPercent2D({x, y});
-      darkestShade = std::min(darkestShade, shade);
-      brightestShade = std::max(brightestShade, shade);
-      expect(shade == proj4d::blockBrightnessPercent2D({x, y}),
-             "a 2D block's random-looking brightness stays deterministic");
+      expect(shade == 100,
+             "2D textures no longer receive per-block brightness noise");
     }
   }
-  expect(darkestShade < 90 && brightestShade > 110,
-         "2D blocks visibly include both darker and brighter variations");
   const auto shadedGreen = proj4d::visionBlockColor2D(0, {7, -3});
   const auto shadedRed = proj4d::visionBlockColor2D(1, {7, -3});
   expect(shadedGreen[1] > shadedGreen[0] && shadedRed[0] > shadedRed[1],
-         "per-block shading preserves the green X and red Y identities");
+         "the legacy 2D axis palette remains stable without random shading");
   proj4d::Camera2D camera;
   camera.position = {0.5, 2.5};
   const auto center = camera.project({2.5, 2.5});
@@ -1679,6 +1668,127 @@ void testDimensionNativeInventoryCraftingAndGameplay() {
   expect(sliceGame.inventory().quick[visibleQuick.front()].item ==
              proj4d::BlockId::dirt,
          "lower-dimensional drops enter a slot visible in that slice");
+}
+
+void testDimensionNativeTexturesAndAmbientOcclusion() {
+  const proj4d::MaterialTextureAtlas &atlas = proj4d::materialTextureAtlas();
+  expect(atlas.width >= 39 * proj4d::materialTextureSize &&
+             atlas.height == proj4d::materialTextureSize &&
+             atlas.rgba.size() ==
+                 static_cast<std::size_t>(atlas.width * atlas.height * 4),
+         "the complete Hypercraft 16x16 material atlas is embedded in the "
+         "binary");
+
+  const proj4d::TexturePixel grassA =
+      proj4d::materialTexturePixel(proj4d::BlockId::grass, 1, 1);
+  const proj4d::TexturePixel grassB =
+      proj4d::materialTexturePixel(proj4d::BlockId::grass, 12, 9);
+  expect(grassA != grassB && grassA.alpha == 255U && grassB.alpha == 255U,
+         "block rendering uses the visible variation in Hypercraft's grass "
+         "tile");
+
+  std::array<std::uint64_t, 5> toolHashes{};
+  constexpr std::array tools{
+      proj4d::BlockId::wood_tool, proj4d::BlockId::stone_tool,
+      proj4d::BlockId::tin_tool, proj4d::BlockId::copper_tool,
+      proj4d::BlockId::iron_tool};
+  for (std::size_t tool = 0; tool < tools.size(); ++tool) {
+    std::size_t visiblePixels = 0U;
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (int y = 0; y < proj4d::materialTextureSize; ++y) {
+      for (int x = 0; x < proj4d::materialTextureSize; ++x) {
+        const proj4d::TexturePixel pixel =
+            proj4d::materialTexturePixel(tools[tool], x, y);
+        visiblePixels += static_cast<std::size_t>(pixel.alpha != 0U);
+        hash = (hash ^ pixel.red) * 1099511628211ULL;
+        hash = (hash ^ pixel.green) * 1099511628211ULL;
+        hash = (hash ^ pixel.blue) * 1099511628211ULL;
+        hash = (hash ^ pixel.alpha) * 1099511628211ULL;
+      }
+    }
+    toolHashes[tool] = hash;
+    expect(visiblePixels >= 12U && visiblePixels <= 100U,
+           "each custom pickaxe is a readable sparse 16x16 item sprite");
+  }
+  std::ranges::sort(toolHashes);
+  expect(std::ranges::unique(toolHashes).begin() == toolHashes.end(),
+         "all five pickaxe material tiers have distinct artwork");
+
+  const proj4d::TexturePixel volumeA =
+      proj4d::sampleMaterialTexture3D(proj4d::BlockId::stone, 0.2, 0.45, 0.8);
+  const proj4d::TexturePixel volumeB =
+      proj4d::sampleMaterialTexture3D(proj4d::BlockId::stone, 0.45, 0.8, 0.2);
+  expect(volumeA == volumeB,
+         "the 4D volume texture uplift has no privileged tangent axis");
+
+  proj4d::BlockWorld backing3D(proj4d::TerrainMode::Flat, 0xA030U);
+  proj4d::BlockWorld3D world3D(backing3D);
+  static_cast<void>(world3D.setBlock({0, 100, 0}, proj4d::BlockId::stone));
+  static_cast<void>(world3D.setBlock({-1, 101, 0}, proj4d::BlockId::stone));
+  static_cast<void>(world3D.setBlock({0, 101, -1}, proj4d::BlockId::stone));
+  const auto faces3D = proj4d::buildVisibleFaces3D(world3D, {0, 100, 0}, 1);
+  const auto topFace = std::ranges::find_if(faces3D, [](const auto &face) {
+    return face.block == proj4d::BlockCoord3D{0, 100, 0} &&
+           face.worldAxis == 1 && face.normalDirection == 1;
+  });
+  expect(topFace != faces3D.end() && topFace->ambientOcclusion[0] == 3U,
+         "3D face corners cache standard side-side-corner ambient occlusion");
+
+  proj4d::BlockWorld backing2D(proj4d::TerrainMode::Flat, 0xA020U);
+  static_cast<void>(backing2D.setBlock({0, 100, 0, 0}, proj4d::BlockId::stone));
+  static_cast<void>(backing2D.setBlock({0, 99, 0, 0}, proj4d::BlockId::stone));
+  static_cast<void>(backing2D.setBlock({-1, 99, 0, 0}, proj4d::BlockId::stone));
+  proj4d::BlockWorld2D world2D(backing2D);
+  const auto edges2D = proj4d::buildVisibleEdges2DChunk(world2D, {0, 6, 0, 0});
+  const auto leftEdge = std::ranges::find_if(edges2D, [](const auto &edge) {
+    return edge.block == proj4d::BlockCoord2D{0, 100} &&
+           proj4d::nearlyEqual(edge.from.x, 0.0) &&
+           proj4d::nearlyEqual(edge.to.x, 0.0);
+  });
+  expect(leftEdge != edges2D.end() && leftEdge->ambientOcclusion[0] == 1U,
+         "2D edge endpoints cache contact occlusion without brightness noise");
+
+  proj4d::BlockWorld world4D(proj4d::TerrainMode::Flat, 0xA040U);
+  const proj4d::BlockCoord center{0, 100, 0, 0};
+  static_cast<void>(world4D.setBlock(center, proj4d::BlockId::stone));
+  for (int subset = 1; subset < 8; ++subset) {
+    proj4d::BlockCoord neighbor = center;
+    ++neighbor.y;
+    if ((subset & 1) != 0) {
+      --neighbor.x;
+    }
+    if ((subset & 2) != 0) {
+      --neighbor.z;
+    }
+    if ((subset & 4) != 0) {
+      --neighbor.w;
+    }
+    static_cast<void>(world4D.setBlock(neighbor, proj4d::BlockId::stone));
+  }
+  const proj4d::VisibilityGrid4D grid =
+      proj4d::buildVisibilityGrid4D(world4D, center, 2);
+  const auto cells = proj4d::buildVisibleBoundaryCells(grid, center, 1);
+  const auto topCell = std::ranges::find_if(cells, [&](const auto &cell) {
+    return cell.block == center && cell.axis == 1 && cell.side == 1;
+  });
+  expect(topCell != cells.end() &&
+             proj4d::ambientOcclusionAt4D(topCell->ambientOcclusion, 0) == 7U &&
+             proj4d::averageAmbientOcclusionPercent4D(
+                 topCell->ambientOcclusion) < 100,
+         "4D boundary cells pack all eight 7-neighbor corner occlusion values "
+         "once during topology extraction");
+
+  const proj4d::VisibleBoundaryCell4D textureCell{
+      {0, 0, 2, 0}, 2, -1, proj4d::BlockId::stone};
+  const proj4d::Camera4D textureCamera;
+  const auto solidVolumes =
+      proj4d::projectBoundaryVolumes4D(std::array{textureCell}, textureCamera);
+  const auto texturedVolumes = proj4d::projectBoundaryVolumes4D(
+      std::array{textureCell}, textureCamera, true);
+  expect(!solidVolumes.empty() && !solidVolumes[0].hasSourceTexture &&
+             !texturedVolumes.empty() && texturedVolumes[0].hasSourceTexture,
+         "4D texture reconstruction data is built only for the textured "
+         "high-resolution slice");
 }
 
 void testAveragedFourDimensionalVolumeColor() {
@@ -2241,6 +2351,7 @@ int main() {
     testLowTerrainMatchesHypercraftFlat();
     testBlockWorldUsesTheSelectedTerrainMode();
     testDimensionNativeInventoryCraftingAndGameplay();
+    testDimensionNativeTexturesAndAmbientOcclusion();
     testAveragedFourDimensionalVolumeColor();
     testCloudsUseSharedDimensionalSlices();
     testInfiniteWorldCacheAndEdits();

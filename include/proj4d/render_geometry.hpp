@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <vector>
@@ -28,7 +30,16 @@ struct VisibleBoundaryCell4D {
   int axis{};
   int side{};
   BlockId material{BlockId::stone};
+  std::uint32_t ambientOcclusion{};
 };
+
+[[nodiscard]] constexpr std::uint8_t ambientOcclusionAt4D(std::uint32_t packed,
+                                                          int corner) {
+  return static_cast<std::uint8_t>((packed >> (std::clamp(corner, 0, 7) * 3)) &
+                                   0x7U);
+}
+
+[[nodiscard]] int averageAmbientOcclusionPercent4D(std::uint32_t packed);
 
 class VisibilityGrid4D {
 public:

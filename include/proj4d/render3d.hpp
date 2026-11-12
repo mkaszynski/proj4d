@@ -17,9 +17,6 @@ inline constexpr std::array<std::array<std::uint8_t, 3>, 3> visionFaceColors3D{{
     {85, 220, 110},
     {80, 135, 235},
 }};
-inline constexpr int visionMinimumBrightnessPercent3D = 82;
-inline constexpr int visionMaximumBrightnessPercent3D = 118;
-
 [[nodiscard]] int blockBrightnessPercent3D(const BlockCoord3D &block);
 [[nodiscard]] std::array<std::uint8_t, 3>
 visionBlockColor3D(int worldAxis, const BlockCoord3D &block);
@@ -40,6 +37,7 @@ struct VisibleFace3D {
   int normalDirection{};
   std::array<Vec3, 4> corners{};
   BlockId material{BlockId::air};
+  std::array<std::uint8_t, 4> ambientOcclusion{};
 };
 
 struct ProjectedFace3D {
@@ -47,6 +45,8 @@ struct ProjectedFace3D {
   int worldAxis{};
   double depth{};
   std::array<Vec2, 8> vertices{};
+  std::array<Vec2, 8> textureCoordinates{};
+  std::array<std::uint8_t, 8> ambientOcclusion{};
   std::size_t vertexCount{};
   BlockId material{BlockId::air};
 };

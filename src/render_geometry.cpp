@@ -54,6 +54,49 @@ std::array<int, 3> cellAxes(int boundaryAxis) {
   return axes;
 }
 
+std::uint32_t boundaryAmbientOcclusion(const VisibilityGrid4D &grid,
+                                       const BlockCoord &block,
+                                       int boundaryAxis, int boundarySide) {
+  const std::array<int, 3> axes = cellAxes(boundaryAxis);
+  std::array<bool, 27> occupancyMask{};
+  for (int third = -1; third <= 1; ++third) {
+    for (int second = -1; second <= 1; ++second) {
+      for (int first = -1; first <= 1; ++first) {
+        if (first == 0 && second == 0 && third == 0) {
+          continue;
+        }
+        BlockCoord neighbor = block;
+        neighbor[static_cast<std::size_t>(boundaryAxis)] += boundarySide;
+        neighbor[static_cast<std::size_t>(axes[0])] += first;
+        neighbor[static_cast<std::size_t>(axes[1])] += second;
+        neighbor[static_cast<std::size_t>(axes[2])] += third;
+        const std::size_t index = static_cast<std::size_t>(
+            (first + 1) + 3 * ((second + 1) + 3 * (third + 1)));
+        occupancyMask[index] = grid.isSolid(neighbor);
+      }
+    }
+  }
+  std::uint32_t packed = 0U;
+  for (int corner = 0; corner < 8; ++corner) {
+    std::uint8_t occupiedCount = 0U;
+    for (int subset = 1; subset < 8; ++subset) {
+      std::array<int, 3> offsets{};
+      for (int bit = 0; bit < 3; ++bit) {
+        if ((subset & (1 << bit)) == 0) {
+          continue;
+        }
+        offsets[static_cast<std::size_t>(bit)] =
+            (corner & (1 << bit)) != 0 ? 1 : -1;
+      }
+      const std::size_t index = static_cast<std::size_t>(
+          (offsets[0] + 1) + 3 * ((offsets[1] + 1) + 3 * (offsets[2] + 1)));
+      occupiedCount += static_cast<std::uint8_t>(occupancyMask[index]);
+    }
+    packed |= static_cast<std::uint32_t>(occupiedCount) << (corner * 3);
+  }
+  return packed;
+}
+
 BlockCoord cellVertex(const VisibleBoundaryCell4D &cell, int bitMask) {
   BlockCoord vertex = cell.block;
   vertex[static_cast<std::size_t>(cell.axis)] += cell.side > 0 ? 1 : 0;
@@ -329,6 +372,16 @@ std::vector<FeatureEdge4D> tesseractEdges(const BlockCoord &block,
 
 } // namespace
 
+int averageAmbientOcclusionPercent4D(std::uint32_t packed) {
+  int total = 0;
+  for (int corner = 0; corner < 8; ++corner) {
+    total += ambientOcclusionAt4D(packed, corner);
+  }
+  // Seven possible tangent-space blockers per corner. Keep the darkest fully
+  // enclosed contact readable while preserving a broad 55-100% range.
+  return std::clamp(100 - (total * 45 + 28) / 56, 55, 100);
+}
+
 VisibilityGrid4D buildVisibilityGrid4D(const BlockWorld &world,
                                        const BlockCoord &center, int radius,
                                        const VisibilityGrid4D *previous) {
@@ -443,7 +496,9 @@ buildVisibleBoundaryCells(const VisibilityGrid4D &grid,
                         : neighborMaterial == material ||
                               proj4d::isSolid(neighborMaterial);
               if (!boundaryHidden) {
-                visibleCells.push_back({block, axis, side, material});
+                visibleCells.push_back(
+                    {block, axis, side, material,
+                     boundaryAmbientOcclusion(grid, block, axis, side)});
               }
             }
           }

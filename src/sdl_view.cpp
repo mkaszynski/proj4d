@@ -30,6 +30,7 @@
 #include "proj4d/render2d.hpp"
 #include "proj4d/render3d.hpp"
 #include "proj4d/render_geometry.hpp"
+#include "proj4d/texture_atlas.hpp"
 #include "proj4d/view_status.hpp"
 #include "proj4d/volume4d.hpp"
 #include "proj4d/world.hpp"
@@ -42,6 +43,46 @@ namespace proj4d {
 namespace {
 
 constexpr double pi = 3.14159265358979323846;
+
+SDL_Texture *materialAtlasTexture(SDL_Renderer *renderer) {
+  static std::unordered_map<SDL_Renderer *, SDL_Texture *> textures;
+  if (const auto found = textures.find(renderer); found != textures.end()) {
+    return found->second;
+  }
+  const MaterialTextureAtlas &atlas = materialTextureAtlas();
+  SDL_Texture *texture =
+      SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32,
+                        SDL_TEXTUREACCESS_STATIC, atlas.width, atlas.height);
+  if (texture != nullptr) {
+    if (SDL_UpdateTexture(texture, nullptr, atlas.rgba.data(),
+                          atlas.width * 4) != 0) {
+      SDL_DestroyTexture(texture);
+      texture = nullptr;
+    } else {
+      SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+      SDL_SetTextureScaleMode(texture, SDL_ScaleModeNearest);
+    }
+  }
+  textures.emplace(renderer, texture);
+  return texture;
+}
+
+SDL_Rect materialTextureSource(BlockId material) {
+  return {materialTextureTile(material) * materialTextureSize, 0,
+          materialTextureSize, materialTextureSize};
+}
+
+SDL_FPoint materialTextureCoordinate(BlockId material, const Vec2 &local) {
+  const MaterialTextureAtlas &atlas = materialTextureAtlas();
+  const float first =
+      static_cast<float>(materialTextureTile(material) * materialTextureSize) +
+      0.5F;
+  constexpr float span = static_cast<float>(materialTextureSize - 1);
+  return {(first + static_cast<float>(local.x) * span) /
+              static_cast<float>(atlas.width),
+          (0.5F + static_cast<float>(local.y) * span) /
+              static_cast<float>(atlas.height)};
+}
 
 struct DisplayCamera {
   double yaw{-0.58};
@@ -783,28 +824,65 @@ void drawInventorySlot(SDL_Renderer *renderer, const InventoryUiSlot &slot,
   if (stack.empty()) {
     return;
   }
-  const BlockColor color = blockColor(stack.item);
-  SDL_SetRenderDrawColor(renderer, color.red, color.green, color.blue, 245);
+  SDL_Texture *atlasTexture = materialAtlasTexture(renderer);
+  const SDL_Rect source = materialTextureSource(stack.item);
+  SDL_Rect itemRect{slot.rectangle.x + 4, slot.rectangle.y + 4,
+                    std::max(1, slot.rectangle.w - 8),
+                    std::max(1, slot.rectangle.h - 8)};
   if (dimension == PlayDimension::Two) {
     const int x = slot.rectangle.x + slot.rectangle.w / 2;
-    SDL_RenderDrawLine(renderer, x, slot.rectangle.y + 2, x,
-                       slot.rectangle.y + slot.rectangle.h - 2);
-  } else {
-    SDL_Rect itemRect{slot.rectangle.x + 4, slot.rectangle.y + 4,
-                      std::max(1, slot.rectangle.w - 8),
-                      std::max(1, slot.rectangle.h - 8)};
-    SDL_RenderFillRect(renderer, &itemRect);
-    if (dimension == PlayDimension::Four) {
-      SDL_SetRenderDrawColor(renderer, std::min(255, color.red + 35),
-                             std::min(255, color.green + 35),
-                             std::min(255, color.blue + 35), 255);
-      SDL_RenderDrawLine(renderer, itemRect.x, itemRect.y, itemRect.x + 4,
-                         itemRect.y - 4);
-      SDL_RenderDrawLine(renderer, itemRect.x + itemRect.w, itemRect.y,
-                         itemRect.x + itemRect.w + 4, itemRect.y - 4);
-      SDL_RenderDrawLine(renderer, itemRect.x + 4, itemRect.y - 4,
-                         itemRect.x + itemRect.w + 4, itemRect.y - 4);
+    for (int texel = 0; texel < materialTextureSize; ++texel) {
+      const TexturePixel pixel =
+          materialTexturePixel(stack.item, materialTextureSize / 2, texel);
+      if (pixel.alpha == 0U) {
+        continue;
+      }
+      const int firstY = itemRect.y + texel * itemRect.h / materialTextureSize;
+      const int lastY =
+          itemRect.y + (texel + 1) * itemRect.h / materialTextureSize;
+      SDL_SetRenderDrawColor(renderer, pixel.red, pixel.green, pixel.blue,
+                             pixel.alpha);
+      const SDL_Rect segment{x - 1, firstY, 3, std::max(1, lastY - firstY)};
+      SDL_RenderFillRect(renderer, &segment);
     }
+  } else if (dimension == PlayDimension::Three) {
+    if (atlasTexture != nullptr) {
+      SDL_RenderCopy(renderer, atlasTexture, &source, &itemRect);
+    }
+  } else if (atlasTexture != nullptr) {
+    constexpr int extrusion = 3;
+    const float left = static_cast<float>(itemRect.x);
+    const float top = static_cast<float>(itemRect.y + extrusion);
+    const float right = static_cast<float>(itemRect.x + itemRect.w - extrusion);
+    const float bottom = static_cast<float>(itemRect.y + itemRect.h);
+    const SDL_FPoint uv00 = materialTextureCoordinate(stack.item, {0.0, 0.0});
+    const SDL_FPoint uv10 = materialTextureCoordinate(stack.item, {1.0, 0.0});
+    const SDL_FPoint uv11 = materialTextureCoordinate(stack.item, {1.0, 1.0});
+    const SDL_FPoint uv01 = materialTextureCoordinate(stack.item, {0.0, 1.0});
+    std::array<SDL_Vertex, 12> vertices{{
+        {{left, top}, {215, 215, 215, 245}, uv00},
+        {{right, top}, {215, 215, 215, 245}, uv10},
+        {{right, bottom}, {215, 215, 215, 245}, uv11},
+        {{left, bottom}, {215, 215, 215, 245}, uv01},
+        {{left, top}, {255, 255, 255, 245}, uv01},
+        {{left + extrusion, top - extrusion}, {255, 255, 255, 245}, uv00},
+        {{right + extrusion, top - extrusion}, {255, 255, 255, 245}, uv10},
+        {{right, top}, {255, 255, 255, 245}, uv11},
+        {{right, top}, {175, 175, 175, 245}, uv00},
+        {{right + extrusion, top - extrusion}, {175, 175, 175, 245}, uv10},
+        {{right + extrusion, bottom - extrusion}, {175, 175, 175, 245}, uv11},
+        {{right, bottom}, {175, 175, 175, 245}, uv01},
+    }};
+    constexpr std::array<int, 18> indices{0, 1, 2, 0, 2, 3,  4, 5,  6,
+                                          4, 6, 7, 8, 9, 10, 8, 10, 11};
+    static_cast<void>(
+        SDL_RenderGeometry(renderer, atlasTexture, vertices.data(),
+                           static_cast<int>(vertices.size()), indices.data(),
+                           static_cast<int>(indices.size())));
+  } else {
+    const BlockColor color = blockColor(stack.item);
+    SDL_SetRenderDrawColor(renderer, color.red, color.green, color.blue, 245);
+    SDL_RenderFillRect(renderer, &itemRect);
   }
   if (stack.count > 1) {
     drawBitmapText(renderer, std::to_string(stack.count), slot.rectangle.x + 2,
@@ -1375,7 +1453,8 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
   if (volumeChanged) {
     const std::uint64_t volumeStart = SDL_GetPerformanceCounter();
     std::vector<ProjectedBoundaryVolume4D> volumes =
-        projectBoundaryVolumes4D(geometryCache.boundaryCells, camera);
+        projectBoundaryVolumes4D(geometryCache.boundaryCells, camera,
+                                 viewMode == VolumeViewMode::CenterSlice);
     std::vector<ProjectedBoundaryVolume4D> cloudVolumes =
         projectCloudVolumes4D(visibleClouds4D(camera.position), camera);
     const std::size_t available =
@@ -1876,16 +1955,25 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
   std::vector<int> indices;
   vertices.reserve(projected.size() * 4U);
   indices.reserve(projected.size() * 6U);
+  SDL_Texture *atlasTexture = materialAtlasTexture(renderer);
+  if (atlasTexture == nullptr) {
+    return false;
+  }
   for (const ProjectedFace3D &face : projected) {
     const int firstVertex = static_cast<int>(vertices.size());
-    const auto color = visionBlockColor3D(face.material, face.block);
     for (std::size_t corner = 0; corner < face.vertexCount; ++corner) {
       const Vec2 &point = face.vertices[corner];
       SDL_Vertex vertex{};
       vertex.position.x = static_cast<float>((point.x + 1.0) * 0.5 * width);
       vertex.position.y = static_cast<float>((1.0 - point.y) * 0.5 * height);
+      const int brightness = std::clamp(
+          100 - static_cast<int>(face.ambientOcclusion[corner]) * 15, 55, 100);
+      const std::uint8_t channel =
+          static_cast<std::uint8_t>((255 * brightness + 50) / 100);
       vertex.color =
-          SDL_Color{color[0], color[1], color[2], blockOpacity(face.material)};
+          SDL_Color{channel, channel, channel, blockOpacity(face.material)};
+      vertex.tex_coord = materialTextureCoordinate(
+          face.material, face.textureCoordinates[corner]);
       vertices.push_back(vertex);
     }
     for (std::size_t corner = 1; corner + 1 < face.vertexCount; ++corner) {
@@ -1896,11 +1984,12 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
   }
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
   const int geometryResult =
-      vertices.empty() ? 0
-                       : SDL_RenderGeometry(renderer, nullptr, vertices.data(),
-                                            static_cast<int>(vertices.size()),
-                                            indices.data(),
-                                            static_cast<int>(indices.size()));
+      vertices.empty()
+          ? 0
+          : SDL_RenderGeometry(renderer, atlasTexture, vertices.data(),
+                               static_cast<int>(vertices.size()),
+                               indices.data(),
+                               static_cast<int>(indices.size()));
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
   if (geometryResult != 0) {
     return false;
