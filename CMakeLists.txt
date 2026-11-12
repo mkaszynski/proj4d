@@ -10,6 +10,7 @@ include(CTest)
 # any private browser, multiplayer, renderer, lighting, or mob code.
 set(PROJ4D_HYPERCRAFT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hypercraft)
 add_library(proj4d_hypercraft_terrain STATIC
+    ${PROJ4D_HYPERCRAFT_DIR}/src/render/texture_atlas.cpp
     ${PROJ4D_HYPERCRAFT_DIR}/src/world/biome_registry.cpp
     ${PROJ4D_HYPERCRAFT_DIR}/src/world/chunk.cpp
     ${PROJ4D_HYPERCRAFT_DIR}/src/world/content_registry.cpp
@@ -23,6 +24,31 @@ target_include_directories(proj4d_hypercraft_terrain PUBLIC
     ${PROJ4D_HYPERCRAFT_DIR}/include
 )
 target_compile_features(proj4d_hypercraft_terrain PUBLIC cxx_std_20)
+target_compile_definitions(proj4d_hypercraft_terrain PRIVATE
+    HYPERCRAFT_USE_LIBPNG=0)
+
+set(PROJ4D_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
+file(MAKE_DIRECTORY ${PROJ4D_GENERATED_DIR})
+set(PROJ4D_PICKAXE_DATA ${PROJ4D_GENERATED_DIR}/pickaxe_texture_data.inc)
+file(WRITE ${PROJ4D_PICKAXE_DATA}
+    "// Generated from the checked-in 16x16 RGBA item sprites.\n")
+foreach(PROJ4D_TOOL IN ITEMS wood_tool stone_tool tin_tool copper_tool iron_tool)
+    set(PROJ4D_TOOL_RGBA
+        ${CMAKE_CURRENT_SOURCE_DIR}/assets/textures/items/${PROJ4D_TOOL}.rgba)
+    file(SIZE ${PROJ4D_TOOL_RGBA} PROJ4D_TOOL_SIZE)
+    if(NOT PROJ4D_TOOL_SIZE EQUAL 1024)
+        message(FATAL_ERROR
+            "${PROJ4D_TOOL_RGBA} must be an exact 16x16 RGBA sprite")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        ${PROJ4D_TOOL_RGBA})
+    file(READ
+        ${PROJ4D_TOOL_RGBA} PROJ4D_TOOL_HEX HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," PROJ4D_TOOL_BYTES
+        "${PROJ4D_TOOL_HEX}")
+    file(APPEND ${PROJ4D_PICKAXE_DATA}
+        "static constexpr std::array<std::uint8_t, 1024> ${PROJ4D_TOOL}_rgba{{${PROJ4D_TOOL_BYTES}}};\n")
+endforeach()
 if(MSVC)
     target_compile_options(proj4d_hypercraft_terrain PRIVATE
         $<$<CONFIG:Debug>:/O2>)
@@ -65,6 +91,7 @@ add_library(proj4d_core
     src/render2d.cpp
     src/render3d.cpp
     src/terrain_generator.cpp
+    src/texture_atlas.cpp
     src/volume4d.cpp
     src/view_status.cpp
     src/world.cpp
@@ -72,7 +99,7 @@ add_library(proj4d_core
     src/world3d.cpp
     src/world_save.cpp
 )
-target_include_directories(proj4d_core PUBLIC include)
+target_include_directories(proj4d_core PUBLIC include PRIVATE ${PROJ4D_GENERATED_DIR})
 target_compile_features(proj4d_core PUBLIC cxx_std_20)
 target_link_libraries(proj4d_core PUBLIC proj4d_hypercraft_terrain Threads::Threads)
 

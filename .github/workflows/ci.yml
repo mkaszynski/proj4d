@@ -37,6 +37,12 @@ jobs:
           ./build/proj4d --2d-smoke-test --smoke-output build/2d-flat.bmp
           ./build/proj4d --2d-low-smoke-test --smoke-output build/2d-low.bmp
           ./build/proj4d --2d-high-smoke-test --smoke-output build/2d-high.bmp
+          ./build/proj4d --4d-inventory-smoke-test --smoke-output build/4d-inventory.bmp
+          ./build/proj4d --3d-inventory-smoke-test --smoke-output build/3d-inventory.bmp
+          ./build/proj4d --2d-inventory-smoke-test --smoke-output build/2d-inventory.bmp
+          ./build/proj4d --4d-fluid-smoke-test --smoke-output build/4d-fluid.bmp
+          ./build/proj4d --3d-fluid-smoke-test --smoke-output build/3d-fluid.bmp
+          ./build/proj4d --2d-fluid-smoke-test --smoke-output build/2d-fluid.bmp
       - name: Verify smoke images
         run: |
           test -s build/dimension-menu.bmp
@@ -53,3 +59,9 @@ jobs:
           test -s build/2d-flat.bmp
           test -s build/2d-low.bmp
           test -s build/2d-high.bmp
+          test -s build/4d-inventory.bmp
+          test -s build/3d-inventory.bmp
+          test -s build/2d-inventory.bmp
+          test -s build/4d-fluid.bmp
+          test -s build/3d-fluid.bmp
+          test -s build/2d-fluid.bmp

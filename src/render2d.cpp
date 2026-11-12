@@ -5,7 +5,37 @@
 #include <cstdint>
 #include <limits>
 
+#include "proj4d/texture_atlas.hpp"
+
 namespace proj4d {
+
+namespace {
+
+bool loadedOccluder(const BlockWorld2D &world, const BlockCoord2D &coordinate) {
+  const std::optional<BlockId> material = world.loadedBlockAt(coordinate);
+  return !material || isSolid(*material);
+}
+
+std::uint8_t endpointOcclusion(const BlockWorld2D &world,
+                               const BlockCoord2D &block, int normalAxis,
+                               int normalDirection, int tangentDirection) {
+  const int tangentAxis = 1 - normalAxis;
+  BlockCoord2D corner = block;
+  corner[static_cast<std::size_t>(normalAxis)] += normalDirection;
+  corner[static_cast<std::size_t>(tangentAxis)] += tangentDirection;
+  return static_cast<std::uint8_t>(loadedOccluder(world, corner));
+}
+
+std::array<std::uint8_t, 3> shade(TexturePixel pixel, double occlusion) {
+  const double brightness = std::clamp(1.0 - occlusion * 0.30, 0.70, 1.0);
+  return {
+      static_cast<std::uint8_t>(std::lround(pixel.red * brightness)),
+      static_cast<std::uint8_t>(std::lround(pixel.green * brightness)),
+      static_cast<std::uint8_t>(std::lround(pixel.blue * brightness)),
+  };
+}
+
+} // namespace
 
 std::vector<VisibleEdge2D> buildVisibleEdges2DChunk(const BlockWorld2D &world,
                                                     const ChunkCoord &chunk) {
@@ -42,7 +72,14 @@ std::vector<VisibleEdge2D> buildVisibleEdges2DChunk(const BlockWorld2D &world,
               direction > 0 ? 1.0 : 0.0;
           Vec2 to = from;
           to[static_cast<std::size_t>(tangentAxis)] += 1.0;
-          edges.push_back({block, tangentAxis, from, to, material});
+          edges.push_back(
+              {block,
+               tangentAxis,
+               from,
+               to,
+               material,
+               {endpointOcclusion(world, block, normalAxis, direction, -1),
+                endpointOcclusion(world, block, normalAxis, direction, 1)}});
         }
       }
     }
@@ -59,6 +96,7 @@ rasterizeVisionEdges2D(std::span<const VisibleEdge2D> edges,
   struct Fragment {
     const VisibleEdge2D *edge{};
     double depth{};
+    double textureAmount{};
     int sample{};
   };
   std::vector<Fragment> fragments;
@@ -136,7 +174,10 @@ rasterizeVisionEdges2D(std::span<const VisibleEdge2D> edges,
         continue;
       }
       const double depth = 1.0 / inverseDepth;
-      fragments.push_back({&edge, depth, index});
+      const double clippedAmount = (projectedAmount / toDepth) / inverseDepth;
+      const double textureAmount =
+          minimumAmount + clippedAmount * (maximumAmount - minimumAmount);
+      fragments.push_back({&edge, depth, textureAmount, index});
     }
   }
   std::ranges::sort(fragments, [](const Fragment &left, const Fragment &right) {
@@ -161,10 +202,20 @@ rasterizeVisionEdges2D(std::span<const VisibleEdge2D> edges,
       const Fragment &fragment = fragments[fragmentIndex];
       const VisibleEdge2D &edge = *fragment.edge;
       const bool targeted = targetedBlock && edge.block == *targetedBlock;
+      const double occlusion =
+          edge.ambientOcclusion[0] * (1.0 - fragment.textureAmount) +
+          edge.ambientOcclusion[1] * fragment.textureAmount;
+      const TexturePixel texture = sampleMaterialTexture1D(
+          edge.material, fragment.textureAmount, edge.worldAxis);
       const std::array<std::uint8_t, 3> source =
           targeted ? std::array<std::uint8_t, 3>{255, 255, 255}
-                   : visionBlockColor2D(edge.material, edge.block);
-      const int alpha = blockOpacity(edge.material);
+                   : shade(texture, occlusion);
+      const int alpha =
+          targeted
+              ? 255
+              : (static_cast<int>(blockOpacity(edge.material)) * texture.alpha +
+                 127) /
+                    255;
       for (std::size_t channel = 0; channel < color.size(); ++channel) {
         color[channel] = (static_cast<int>(source[channel]) * alpha +
                           color[channel] * (255 - alpha) + 127) /
@@ -187,33 +238,22 @@ rasterizeVisionEdges2D(std::span<const VisibleEdge2D> edges,
 }
 
 int blockBrightnessPercent2D(const BlockCoord2D &block) {
-  std::uint32_t hash = 2166136261U;
-  hash = (hash ^ static_cast<std::uint32_t>(block.x)) * 16777619U;
-  hash = (hash ^ static_cast<std::uint32_t>(block.y)) * 16777619U;
-  hash ^= hash >> 16U;
-  constexpr int shadeCount =
-      visionMaximumBrightnessPercent2D - visionMinimumBrightnessPercent2D + 1;
-  return visionMinimumBrightnessPercent2D +
-         static_cast<int>(hash % static_cast<std::uint32_t>(shadeCount));
+  static_cast<void>(block);
+  return 100;
 }
 
 std::array<std::uint8_t, 3> visionBlockColor2D(int worldAxis,
                                                const BlockCoord2D &block) {
   const auto &baseColor =
       visionAxisColors2D.at(static_cast<std::size_t>(worldAxis));
-  const int brightness = blockBrightnessPercent2D(block);
-  std::array<std::uint8_t, 3> result{};
-  for (std::size_t channel = 0; channel < result.size(); ++channel) {
-    result[channel] = static_cast<std::uint8_t>(std::clamp(
-        (static_cast<int>(baseColor[channel]) * brightness + 50) / 100, 0,
-        255));
-  }
-  return result;
+  static_cast<void>(block);
+  return baseColor;
 }
 
 std::array<std::uint8_t, 3> visionBlockColor2D(BlockId material,
                                                const BlockCoord2D &block) {
-  return shadedBlockColor(material, blockBrightnessPercent2D(block)).array();
+  static_cast<void>(block);
+  return blockColor(material).array();
 }
 
 std::vector<VisionSample2D>
@@ -239,10 +279,18 @@ buildVisionLine(const BlockWorld2D &world, const Camera2D &camera,
     const int edgeAxis = hit->boundaryNormalAxis == 0 ? 1 : 0;
     const BlockId material = world.blockAt(hit->block);
     const bool targeted = targetedBlock && hit->block == *targetedBlock;
-    samples.push_back({true, edgeAxis, hit->distance, hit->block, targeted,
-                       material,
-                       targeted ? std::array<std::uint8_t, 3>{255, 255, 255}
-                                : visionBlockColor2D(material, hit->block)});
+    const Vec2 direction = camera.rayDirectionAt(imagePosition);
+    const Vec2 point = camera.position + direction * hit->distance;
+    const double textureAmount =
+        point[static_cast<std::size_t>(edgeAxis)] -
+        std::floor(point[static_cast<std::size_t>(edgeAxis)]);
+    const TexturePixel texture =
+        sampleMaterialTexture1D(material, textureAmount, edgeAxis);
+    samples.push_back(
+        {true, edgeAxis, hit->distance, hit->block, targeted, material,
+         targeted ? std::array<std::uint8_t, 3>{255, 255, 255}
+                  : std::array<std::uint8_t, 3>{texture.red, texture.green,
+                                                texture.blue}});
   }
   return samples;
 }

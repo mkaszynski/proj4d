@@ -8,6 +8,8 @@
 #include <thread>
 #include <utility>
 
+#include "proj4d/texture_atlas.hpp"
+
 namespace proj4d {
 
 namespace {
@@ -252,12 +254,21 @@ struct PixelRay {
 
 struct PreparedVolume {
   VolumePlaneSet planeSet{};
+  BlockId material{BlockId::air};
   BlockColor color{};
+  int brightnessPercent{100};
   double opacity{1.0};
   double sourceDepthNumerator{};
   double sourceDepthDenominatorConstant{};
   Vec3 sourceDepthDenominatorGradient{};
   bool hasSourceDepth{};
+  std::uint32_t ambientOcclusion{};
+  Vec3 sourceTextureOffset{};
+  Vec3 sourceTextureForward{};
+  Vec3 sourceTextureImageX{};
+  Vec3 sourceTextureImageY{};
+  Vec3 sourceTextureImageZ{};
+  bool hasSourceTexture{};
   bool fluid{};
   int firstX{};
   int lastX{};
@@ -281,6 +292,36 @@ double sourceDepthAt(const PreparedVolume &volume, const Vec3 &point) {
   return depth > 0.0 && std::isfinite(depth)
              ? depth
              : std::numeric_limits<double>::infinity();
+}
+
+Vec3 sourceTextureCoordinateAt(const PreparedVolume &volume,
+                               const Vec3 &point) {
+  const double depth = sourceDepthAt(volume, point);
+  if (!std::isfinite(depth)) {
+    return {};
+  }
+  const Vec3 direction = volume.sourceTextureForward +
+                         volume.sourceTextureImageX * point.x +
+                         volume.sourceTextureImageY * point.y +
+                         volume.sourceTextureImageZ * point.z;
+  const Vec3 coordinate = volume.sourceTextureOffset + direction * depth;
+  return {std::clamp(coordinate.x, 0.0, 1.0),
+          std::clamp(coordinate.y, 0.0, 1.0),
+          std::clamp(coordinate.z, 0.0, 1.0)};
+}
+
+double ambientOcclusionBrightness(const PreparedVolume &volume,
+                                  const Vec3 &coordinate) {
+  double occlusion = 0.0;
+  for (int corner = 0; corner < 8; ++corner) {
+    double weight = 1.0;
+    for (int bit = 0; bit < 3; ++bit) {
+      const double amount = coordinate[static_cast<std::size_t>(bit)];
+      weight *= (corner & (1 << bit)) != 0 ? amount : 1.0 - amount;
+    }
+    occlusion += weight * ambientOcclusionAt4D(volume.ambientOcclusion, corner);
+  }
+  return std::clamp(1.0 - occlusion * (0.45 / 7.0), 0.55, 1.0);
 }
 
 } // namespace
@@ -314,7 +355,7 @@ void setProjectedSourcePlane4D(ProjectedBoundaryVolume4D &volume,
 
 std::vector<ProjectedBoundaryVolume4D>
 projectBoundaryVolumes4D(std::span<const VisibleBoundaryCell4D> cells,
-                         const Camera4D &camera) {
+                         const Camera4D &camera, bool includeSourceTexture) {
   std::vector<ProjectedBoundaryVolume4D> volumes;
   volumes.reserve(
       std::min<std::size_t>(cells.size(), maximumProjectedBoundaryVolumes));
@@ -326,10 +367,29 @@ projectBoundaryVolumes4D(std::span<const VisibleBoundaryCell4D> cells,
     volume.material = cell.material;
     volume.brightnessPercent =
         boundaryBrightnessPercent4D(cell.axis, cell.side);
+    volume.ambientOcclusion = cell.ambientOcclusion;
     setProjectedSourcePlane4D(
         volume, camera, cell.axis,
         static_cast<double>(cell.block[static_cast<std::size_t>(cell.axis)] +
                             (cell.side > 0 ? 1 : 0)));
+    if (includeSourceTexture) {
+      const std::array<int, 3> axes = tangentAxes(cell.axis);
+      for (int index = 0; index < 3; ++index) {
+        const std::size_t output = static_cast<std::size_t>(index);
+        const std::size_t source =
+            static_cast<std::size_t>(axes[static_cast<std::size_t>(index)]);
+        volume.sourceTextureOffset[output] =
+            camera.position[source] - cell.block[source];
+        volume.sourceTextureForward[output] = camera.forward[source];
+        volume.sourceTextureImageX[output] =
+            camera.imageX[source] / camera.focalLength;
+        volume.sourceTextureImageY[output] =
+            camera.imageY[source] / camera.focalLength;
+        volume.sourceTextureImageZ[output] =
+            camera.imageZ[source] / camera.focalLength;
+      }
+      volume.hasSourceTexture = true;
+    }
     std::array<Vec4, 8> sourceVertices{};
     std::array<double, 8> depths{};
     bool entirelyInside = true;
@@ -479,14 +539,26 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
     if (!planes) {
       continue;
     }
+    const int ambientBrightness =
+        averageAmbientOcclusionPercent4D(volume.ambientOcclusion);
     PreparedVolume preparedVolume{
         *planes,
-        shadedBlockColor(volume.material, volume.brightnessPercent),
+        volume.material,
+        shadedBlockColor(volume.material,
+                         volume.brightnessPercent * ambientBrightness / 100),
+        volume.brightnessPercent,
         static_cast<double>(blockOpacity(volume.material)) / 255.0,
         volume.sourceDepthNumerator,
         volume.sourceDepthDenominatorConstant,
         volume.sourceDepthDenominatorGradient,
         volume.hasSourceDepth,
+        volume.ambientOcclusion,
+        volume.sourceTextureOffset,
+        volume.sourceTextureForward,
+        volume.sourceTextureImageX,
+        volume.sourceTextureImageY,
+        volume.sourceTextureImageZ,
+        volume.hasSourceTexture,
         isFluid(volume.material),
     };
     if (viewMode == VolumeViewMode::CenterSlice) {
@@ -552,12 +624,33 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
 
     double coveredOpacity = 0.0;
     const auto addVolume = [&](const PreparedVolume &volume) {
-      const double contribution = measure * volume.opacity;
-      pixelRed += static_cast<double>(volume.color.red) * contribution;
-      pixelGreen += static_cast<double>(volume.color.green) * contribution;
-      pixelBlue += static_cast<double>(volume.color.blue) * contribution;
+      BlockColor sourceColor = volume.color;
+      double opacity = volume.opacity;
+      if (viewMode == VolumeViewMode::CenterSlice && volume.hasSourceTexture) {
+        const Vec3 coordinate = sourceTextureCoordinateAt(volume, point);
+        const TexturePixel texture = sampleMaterialTexture3D(
+            volume.material, coordinate.x, coordinate.y, coordinate.z);
+        const int oriented =
+            std::clamp(static_cast<int>(std::lround(
+                           ambientOcclusionBrightness(volume, coordinate) *
+                           volume.brightnessPercent)),
+                       0, 140);
+        sourceColor = {
+            static_cast<std::uint8_t>(std::clamp(
+                static_cast<int>(texture.red) * oriented / 100, 0, 255)),
+            static_cast<std::uint8_t>(std::clamp(
+                static_cast<int>(texture.green) * oriented / 100, 0, 255)),
+            static_cast<std::uint8_t>(std::clamp(
+                static_cast<int>(texture.blue) * oriented / 100, 0, 255)),
+        };
+        opacity *= static_cast<double>(texture.alpha) / 255.0;
+      }
+      const double contribution = measure * opacity;
+      pixelRed += static_cast<double>(sourceColor.red) * contribution;
+      pixelGreen += static_cast<double>(sourceColor.green) * contribution;
+      pixelBlue += static_cast<double>(sourceColor.blue) * contribution;
       pixelWeight += contribution;
-      coveredOpacity += volume.opacity;
+      coveredOpacity += opacity;
     };
     for (const std::size_t volumeIndex : activeVolumes) {
       const PreparedVolume &volume = prepared[volumeIndex];

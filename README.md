@@ -28,9 +28,10 @@ It uses standard mouse look and WASD movement. Only cube faces that are not
 blocked by a solid neighbor
 are meshed, clipped at the near plane, and drawn in one depth-ordered triangle
 batch so rear blocks and underground cavities stay behind solid terrain. Face
-and wireframe colors identify grass, stone, wood, ores, and the other block
-materials. Each cube has a stable coordinate-derived lighter or darker
-variation. The targeted cube is surrounded by a white wireframe.
+textures identify grass, stone, wood, ores, and the other block materials.
+Cached face-corner ambient occlusion darkens real contacts and overhangs without
+randomly changing otherwise identical blocks. The targeted cube is surrounded
+by a white wireframe.
 
 The 2D mode follows the same idea one dimension lower. It is not a side-on
 platformer or an overhead view:
@@ -44,10 +45,10 @@ whose width is one tenth of its height. This makes projected block edges
 readable as rectangular intervals without widening the line to half of the
 display. Exposed square boundaries are cached per chunk, projected into 1D
 intervals, and depth-rasterized so only the nearest solid edge is shown;
-terrain cannot be seen through other blocks. In the reversed 2D palette, green
-intervals use their material color. Every block receives a stable,
-coordinate-derived lighter or darker shade so neighboring projected blocks
-remain visible without flickering as the camera moves.
+terrain cannot be seen through other blocks. Each interval samples a
+one-dimensional section of its material texture. Cached endpoint ambient
+occlusion darkens genuine contacts without per-block random brightness or
+flicker.
 
 All three dimensions offer the same terrain choices:
 
@@ -125,13 +126,39 @@ reusable `320x320` projected-space texture, twice the solid view's maximum
 linear resolution and four times its pixel count. Orbiting the vision cube
 remaps that cached square without recalculating its 4D contents.
 
+## Textures and ambient occlusion
+
+Proj4D embeds Hypercraft's 16x16 material atlas into the executable. The 2D
+view samples a 1D section of each tile, the 3D view uses the ordinary square,
+and the 4D projection slice samples a direction-neutral 16x16x16 uplift that
+blends the three orthogonal readings of the same source tile. Inventory items
+follow the same line, square, and small textured-cube progression. The five
+tool tiers use original pickaxe sprites rather than Hypercraft's generic tool
+icons.
+
+The default solid 4D view intentionally retains material colors and directional
+face shading instead of pretending that one texture lookup represents a whole
+3D boundary volume. Correct texturing there requires exact integration through
+a varying 16-cubed texture along every analytical interval. Midpoint sampling
+would break the path-length-average guarantee, while exact per-texel splitting
+would make the interactive compositor substantially more expensive. The
+higher-resolution `M` slice has a unique source point per pixel, so it provides
+full 4D volume textures without that compromise.
+
+Ambient occlusion is dimension-native and cached with topology: one
+outside-layer neighbor per 2D endpoint, three per 3D face corner, and seven per
+each of a 4D boundary cell's eight corners. The 4D values are packed and reuse a
+26-cell occupancy mask. Camera motion performs no AO rays or neighbor queries;
+the solid compositor uses a precomputed boundary average and the 4D slice
+trilinearly interpolates all eight values.
+
 ## Build and run
 
 Proj4D requires CMake 3.24 or newer, a C++20 compiler, and SDL2. The repository
 includes a narrowly scoped snapshot of Hypercraft commit `d830abc` and compiles
-only its authoritative native terrain/content sources; browser, multiplayer,
-lighting, and mob code is not included. Builds are therefore reproducible
-without access to another repository or to the network.
+only its authoritative native terrain/content and texture-atlas sources;
+browser, multiplayer, lighting, and mob code is not included. Builds are
+therefore reproducible without access to another repository or to the network.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -143,9 +170,9 @@ ctest --test-dir build --output-on-failure
 On NixOS, SDL2 can be supplied without modifying the system:
 
 ```bash
-nix-shell -p SDL2 cmake pkg-config --run \
-  "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release"
-nix-shell -p SDL2 cmake pkg-config --run \
+nix-shell -p clang SDL2 cmake pkg-config --run \
+  "CC=clang CXX=clang++ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release"
+nix-shell -p clang SDL2 cmake pkg-config --run \
   "cmake --build build --parallel"
 ./build/proj4d
 ```

@@ -31,9 +31,11 @@ Apply these invariants to every change in the Proj4D repository.
   the compatibility enum value `TerrainMode::Density`. Retain
   `--normal-smoke-test` only as a compatibility command name. Pin the upstream
   commit so saved procedural worlds and parity tests remain reproducible.
-- Keep the minimal pinned Hypercraft terrain/content snapshot in-tree so the
+- Keep the minimal pinned Hypercraft terrain/content and 16x16 texture-atlas
+  snapshot in-tree so the
   public repository builds reproducibly without credentials or network access.
-  Never replace it with a configure-time fetch from a private repository, and
+  Never replace it with a configure-time fetch from a private repository. Only
+  import the public-safe material/item texture sources required by Proj4D;
   never import unrelated Hypercraft client, server, asset, or user data.
 - Implement each 2D terrain as a thin view of the authoritative 4D
   `BlockWorld`: `(x,y)` must read and edit `(x,y,0,0)` through the same 4D
@@ -82,6 +84,16 @@ Apply these invariants to every change in the Proj4D repository.
 - Color projected filled shapes and wireframes by block material. Keep grass,
   dirt, stone, wood, leaves, ores, crafted blocks, and fluids distinguishable;
   do not restore axis-colored world edges.
+- Keep one canonical embedded 16x16 material atlas. Sample a 1D tile section
+  in 2D, the ordinary square tile in 3D, and a direction-neutral 3D uplift in
+  the higher-resolution 4D projection slice. Items follow the same
+  dimension-native line/square/cube presentation. Do not add runtime asset-path
+  or network dependencies.
+- Keep the exact solid 4D path-length compositor texture-free unless a bounded
+  implementation can integrate a varying 3D texture over every analytical ray
+  interval without fixed-step sampling, occlusion errors, or a material frame
+  regression. Never substitute a midpoint texture lookup and call it an exact
+  average.
 - Shade projected 4D boundary volumes by their stable ±X/±Y/±Z/±W facing while
   preserving material hue. Keep the upward boundary brightest, downward
   boundary darkest, and all eight directions visibly distinct; do not use
@@ -127,9 +139,10 @@ Apply these invariants to every change in the Proj4D repository.
   a blue-sky background. Use bounded exposed-face meshing, near-plane clipping,
   and batched triangle rendering; do not use per-screen-pixel world ray
   tracing or reveal occluded terrain.
-- Color cube faces by block material. Give each cube a stable
-  coordinate-derived lighter or darker shade without changing material
-  identity. Draw a white wireframe around the selected cube.
+- Texture cube faces from the canonical square material tile. Do not add
+  coordinate-random brightness; reserve deterministic darkening for cached
+  ambient occlusion at actual contacts. Draw a white wireframe around the
+  selected cube.
 - Use conventional mouse yaw and pitch, clamp pitch at straight up/down, use
   `W/S` forward/back, `A/D` strafe, `Space` jump, and held `Shift` sneak.
   Preserve the exact shared physics constants, axis-separated wall sliding,
@@ -149,10 +162,10 @@ Apply these invariants to every change in the Proj4D repository.
   and depth-rasterize those intervals. Never restore per-screen-sample world
   ray tracing, and never reveal rear blocks or underground cavities through
   nearer terrain.
-- Color each visible boundary interval by block material. Keep the center
-  targeting mark visible. Give every block a stable coordinate-derived,
-  visibly lighter or darker variation of its material color; never use
-  frame-time randomness that makes block colors shimmer.
+- Texture each visible boundary interval from a canonical 1D section of its
+  material tile. Keep the center targeting mark visible. Do not add
+  coordinate-random brightness; reserve deterministic darkening for cached
+  ambient occlusion at actual contacts.
 - Map vertical mouse motion to vertical 2D look, ignore horizontal mouse
   motion, and clamp look at straight up and straight down. Use `Z` to reverse
   the horizontal view and forward direction.
@@ -245,6 +258,11 @@ Apply these invariants to every change in the Proj4D repository.
   occupancy in a dense bounded grid, reuse its overlap when the camera crosses
   a block, and cache wireframe visibility until source camera or topology
   changes. External vision-cube orbit must not redo source-world occlusion.
+- Compute ambient occlusion only while cached boundary topology is extracted:
+  one outside-layer neighbor per 2D endpoint, the standard three outside-layer
+  neighbors per 3D face corner, and a packed seven-neighbor value per each of a
+  4D boundary cell's eight corners. Reuse a local occupancy mask in 4D. Never
+  cast ambient-occlusion rays or rescan world neighbors per pixel or frame.
 - Keep hot-path block solidity an exact constant-time lookup. Separate terrain
   geometry distance from the farther cloud/camera distance so visual sky range
   does not multiply terrain work.

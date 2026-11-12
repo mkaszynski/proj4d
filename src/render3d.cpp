@@ -7,34 +7,22 @@
 namespace proj4d {
 
 int blockBrightnessPercent3D(const BlockCoord3D &block) {
-  std::uint32_t hash = 2166136261U;
-  hash = (hash ^ static_cast<std::uint32_t>(block.x)) * 16777619U;
-  hash = (hash ^ static_cast<std::uint32_t>(block.y)) * 16777619U;
-  hash = (hash ^ static_cast<std::uint32_t>(block.z)) * 16777619U;
-  hash ^= hash >> 16U;
-  constexpr int shadeCount =
-      visionMaximumBrightnessPercent3D - visionMinimumBrightnessPercent3D + 1;
-  return visionMinimumBrightnessPercent3D +
-         static_cast<int>(hash % static_cast<std::uint32_t>(shadeCount));
+  static_cast<void>(block);
+  return 100;
 }
 
 std::array<std::uint8_t, 3> visionBlockColor3D(int worldAxis,
                                                const BlockCoord3D &block) {
   const auto &baseColor =
       visionFaceColors3D.at(static_cast<std::size_t>(worldAxis));
-  const int brightness = blockBrightnessPercent3D(block);
-  std::array<std::uint8_t, 3> result{};
-  for (std::size_t channel = 0; channel < result.size(); ++channel) {
-    result[channel] = static_cast<std::uint8_t>(std::clamp(
-        (static_cast<int>(baseColor[channel]) * brightness + 50) / 100, 0,
-        255));
-  }
-  return result;
+  static_cast<void>(block);
+  return baseColor;
 }
 
 std::array<std::uint8_t, 3> visionBlockColor3D(BlockId material,
                                                const BlockCoord3D &block) {
-  return shadedBlockColor(material, blockBrightnessPercent3D(block)).array();
+  static_cast<void>(block);
+  return blockColor(material).array();
 }
 
 std::vector<VisionSample3D> buildVisionImage3D(const BlockWorld3D &world,
@@ -49,6 +37,49 @@ std::vector<VisionSample3D> buildVisionImage3D(const BlockWorld3D &world,
 }
 
 namespace {
+
+bool loadedOccluder(const BlockWorld3D &world, const BlockCoord3D &coordinate,
+                    bool generateMissingNeighbors) {
+  const std::optional<BlockId> material =
+      generateMissingNeighbors ? std::optional(world.blockAt(coordinate))
+                               : world.loadedBlockAt(coordinate);
+  return !material || isSolid(*material);
+}
+
+std::uint8_t cornerOcclusion(const BlockWorld3D &world,
+                             const BlockCoord3D &block, int normalAxis,
+                             int normalDirection,
+                             const std::array<int, 2> &tangentAxes,
+                             const std::array<int, 2> &offsets,
+                             bool generateMissingNeighbors) {
+  BlockCoord3D first = block;
+  BlockCoord3D second = block;
+  BlockCoord3D corner = block;
+  first[static_cast<std::size_t>(normalAxis)] += normalDirection;
+  second[static_cast<std::size_t>(normalAxis)] += normalDirection;
+  corner[static_cast<std::size_t>(normalAxis)] += normalDirection;
+  for (int index = 0; index < 2; ++index) {
+    const int axis = tangentAxes[static_cast<std::size_t>(index)];
+    const int direction =
+        offsets[static_cast<std::size_t>(index)] == 0 ? -1 : 1;
+    if (index == 0) {
+      first[static_cast<std::size_t>(axis)] += direction;
+    } else {
+      second[static_cast<std::size_t>(axis)] += direction;
+    }
+    corner[static_cast<std::size_t>(axis)] += direction;
+  }
+  const bool firstBlocked =
+      loadedOccluder(world, first, generateMissingNeighbors);
+  const bool secondBlocked =
+      loadedOccluder(world, second, generateMissingNeighbors);
+  if (firstBlocked && secondBlocked) {
+    return 3U;
+  }
+  return static_cast<std::uint8_t>(
+      firstBlocked + secondBlocked +
+      loadedOccluder(world, corner, generateMissingNeighbors));
+}
 
 void appendVisibleBlockFaces(const BlockWorld3D &world,
                              const BlockCoord3D &block,
@@ -101,7 +132,14 @@ void appendVisibleBlockFaces(const BlockWorld3D &world,
             cornerOffsets[corner][1];
         corners[corner] = point;
       }
-      faces.push_back({block, axis, direction, corners, material});
+      std::array<std::uint8_t, 4> ambientOcclusion{};
+      for (std::size_t corner = 0; corner < ambientOcclusion.size(); ++corner) {
+        ambientOcclusion[corner] =
+            cornerOcclusion(world, block, axis, direction, tangentAxes,
+                            cornerOffsets[corner], generateMissingNeighbors);
+      }
+      faces.push_back(
+          {block, axis, direction, corners, material, ambientOcclusion});
     }
   }
 }
@@ -147,8 +185,14 @@ double cameraDepth(const Camera3D &camera, const Vec3 &point) {
   return dot(point - camera.position, camera.forward());
 }
 
+struct ClippedVertex3D {
+  Vec3 point{};
+  Vec2 textureCoordinate{};
+  double ambientOcclusion{};
+};
+
 struct ClippedPolygon3D {
-  std::array<Vec3, 8> vertices{};
+  std::array<ClippedVertex3D, 8> vertices{};
   std::size_t count{};
 };
 
@@ -159,20 +203,25 @@ ClippedPolygon3D clipDepthPlane(const ClippedPolygon3D &input,
   if (input.count == 0U) {
     return output;
   }
-  Vec3 previous = input.vertices[input.count - 1U];
-  double previousDistance = cameraDepth(camera, previous) - plane;
+  ClippedVertex3D previous = input.vertices[input.count - 1U];
+  double previousDistance = cameraDepth(camera, previous.point) - plane;
   bool previousInside =
       keepGreater ? previousDistance >= 0.0 : previousDistance <= 0.0;
   for (std::size_t index = 0; index < input.count; ++index) {
-    const Vec3 current = input.vertices[index];
-    const double currentDistance = cameraDepth(camera, current) - plane;
+    const ClippedVertex3D current = input.vertices[index];
+    const double currentDistance = cameraDepth(camera, current.point) - plane;
     const bool currentInside =
         keepGreater ? currentDistance >= 0.0 : currentDistance <= 0.0;
     if (currentInside != previousInside) {
       const double amount =
           previousDistance / (previousDistance - currentDistance);
-      output.vertices[output.count++] =
-          previous + (current - previous) * amount;
+      output.vertices[output.count++] = {
+          previous.point + (current.point - previous.point) * amount,
+          previous.textureCoordinate +
+              (current.textureCoordinate - previous.textureCoordinate) * amount,
+          previous.ambientOcclusion +
+              (current.ambientOcclusion - previous.ambientOcclusion) * amount,
+      };
     }
     if (currentInside) {
       output.vertices[output.count++] = current;
@@ -273,7 +322,13 @@ projectVisibleFaces3D(const std::vector<VisibleFace3D> &faces,
     }
 
     ClippedPolygon3D polygon;
-    std::ranges::copy(face.corners, polygon.vertices.begin());
+    constexpr std::array<Vec2, 4> textureCoordinates{
+        {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {0.0, 1.0}}};
+    for (std::size_t corner = 0; corner < face.corners.size(); ++corner) {
+      polygon.vertices[corner] = {
+          face.corners[corner], textureCoordinates[corner],
+          static_cast<double>(face.ambientOcclusion[corner])};
+    }
     polygon.count = face.corners.size();
     constexpr double clippingMargin = 1.0e-7;
     polygon = clipDepthPlane(polygon, camera, camera.nearPlane + clippingMargin,
@@ -291,13 +346,18 @@ projectVisibleFaces3D(const std::vector<VisibleFace3D> &faces,
     bool allAbove = true;
     bool allBelow = true;
     for (std::size_t index = 0; index < polygon.count; ++index) {
-      const Vec3 &point = polygon.vertices[index];
+      const Vec3 &point = polygon.vertices[index].point;
       const auto vertex = camera.project(point, aspectRatio);
       if (!vertex) {
         projected.vertexCount = 0U;
         break;
       }
       projected.vertices[projected.vertexCount++] = vertex->position;
+      projected.textureCoordinates[projected.vertexCount - 1U] =
+          polygon.vertices[index].textureCoordinate;
+      projected.ambientOcclusion[projected.vertexCount - 1U] =
+          static_cast<std::uint8_t>(std::clamp(
+              std::lround(polygon.vertices[index].ambientOcclusion), 0L, 3L));
       projected.depth += vertex->depth;
       allLeft = allLeft && vertex->position.x < -1.0;
       allRight = allRight && vertex->position.x > 1.0;
