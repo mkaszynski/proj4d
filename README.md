@@ -152,6 +152,26 @@ each of a 4D boundary cell's eight corners. The 4D values are packed and reuse a
 the solid compositor uses a precomputed boundary average and the 4D slice
 trilinearly interpolates all eight values.
 
+## Render distance and streaming
+
+The 2D and 3D views stream the same authoritative 16x16x16x16 chunks as 4D,
+but retain dimension-native edge and face meshes per chunk. Chunks are selected
+in nearest-first radial order and the visible field expands progressively while
+the bounded background generator completes the outer rings. The 2D view uses a
+four-chunk radius (about 64 blocks) and the 3D view uses a two-chunk radius
+(about 32 blocks); moving within a loaded chunk does not rebuild their cached
+topology.
+
+The exact 4D projection keeps a smaller block-space radius because its source
+region grows to the fourth power. Sliding the region reuses boundary cells and
+ambient occlusion from the overlap and extracts only the entering shell.
+Projected boundary volumes wholly outside the 3D vision cube are discarded
+before compositing, and the solid view selects its bounded internal resolution
+from both projected volume count and conservative screen-coverage work. These
+optimizations preserve analytical source-depth occlusion and path-length
+averaging rather than replacing them with ray marching or a conventional 3D
+depth buffer.
+
 ## Build and run
 
 Proj4D requires CMake 3.24 or newer, a C++20 compiler, and SDL2. The repository

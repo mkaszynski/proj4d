@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <thread>
@@ -72,6 +74,65 @@ Vec3 inverseRotateDirection(const Vec3 &direction,
 
 Vec3 displayOrigin(const VolumeDisplayCamera &camera) {
   return inverseRotateDirection({0.0, 0.0, camera.distance}, camera);
+}
+
+std::uint64_t
+projectedCoverageEstimate(std::span<const ProjectedBoundaryVolume4D> volumes,
+                          const VolumeDisplayCamera &camera, int width,
+                          int height) {
+  const double scale = static_cast<double>(std::min(width, height)) * 1.45;
+  std::uint64_t coverage = 0U;
+  for (const ProjectedBoundaryVolume4D &volume : volumes) {
+    double minimumX = static_cast<double>(width);
+    double maximumX = 0.0;
+    double minimumY = static_cast<double>(height);
+    double maximumY = 0.0;
+    bool visible = false;
+    for (std::size_t vertex = 0; vertex < volume.vertexCount; ++vertex) {
+      const Vec3 rotated = rotateForDisplay(volume.vertices[vertex], camera);
+      const double depth = camera.distance - rotated.z;
+      if (depth <= 0.05) {
+        continue;
+      }
+      minimumX = std::min(minimumX, static_cast<double>(width) * 0.5 +
+                                        rotated.x * scale / depth);
+      maximumX = std::max(maximumX, static_cast<double>(width) * 0.5 +
+                                        rotated.x * scale / depth);
+      minimumY = std::min(minimumY, static_cast<double>(height) * 0.5 -
+                                        rotated.y * scale / depth);
+      maximumY = std::max(maximumY, static_cast<double>(height) * 0.5 -
+                                        rotated.y * scale / depth);
+      visible = true;
+    }
+    if (!visible || maximumX < 0.0 || maximumY < 0.0 || minimumX >= width ||
+        minimumY >= height) {
+      continue;
+    }
+    const double clippedWidth =
+        std::max(0.0, std::min(maximumX, static_cast<double>(width - 1)) -
+                          std::max(minimumX, 0.0) + 1.0);
+    const double clippedHeight =
+        std::max(0.0, std::min(maximumY, static_cast<double>(height - 1)) -
+                          std::max(minimumY, 0.0) + 1.0);
+    coverage +=
+        static_cast<std::uint64_t>(std::ceil(clippedWidth * clippedHeight));
+  }
+  return coverage;
+}
+
+bool entirelyOutsideVisionCube(const ProjectedBoundaryVolume4D &volume) {
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    bool below = true;
+    bool above = true;
+    for (std::size_t vertex = 0; vertex < volume.vertexCount; ++vertex) {
+      below = below && volume.vertices[vertex][axis] < -1.0;
+      above = above && volume.vertices[vertex][axis] > 1.0;
+    }
+    if (below || above) {
+      return true;
+    }
+  }
+  return false;
 }
 
 struct Plane {
@@ -416,7 +477,9 @@ projectBoundaryVolumes4D(std::span<const VisibleBoundaryCell4D> cells,
       }
     }
     if (entirelyInside) {
-      volumes.push_back(volume);
+      if (!entirelyOutsideVisionCube(volume)) {
+        volumes.push_back(volume);
+      }
       continue;
     }
 
@@ -464,7 +527,7 @@ projectBoundaryVolumes4D(std::span<const VisibleBoundaryCell4D> cells,
         }
       }
     }
-    if (volume.vertexCount >= 4U) {
+    if (volume.vertexCount >= 4U && !entirelyOutsideVisionCube(volume)) {
       volumes.push_back(volume);
     }
   }
@@ -483,11 +546,24 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
                                 ? maximumSliceImageWidth
                                 : maximumVolumeImageWidth);
   if (viewMode == VolumeViewMode::Solid) {
-    if (volumes.size() > 7000U) {
+    const int estimateWidth = std::min(displayWidth, maximumWidth);
+    const int estimateHeight = std::max(
+        1, static_cast<int>(std::lround(static_cast<double>(displayHeight) *
+                                        estimateWidth / displayWidth)));
+    const std::uint64_t coverage = projectedCoverageEstimate(
+        volumes, camera, estimateWidth, estimateHeight);
+    if (std::getenv("PROJ4D_PROFILE_4D") != nullptr) {
+      std::cerr << "4D coverage profile: volumes=" << volumes.size()
+                << ", pixels=" << coverage << '\n';
+    }
+    // Projected-frustum culling removes volumes that can never reach the vision
+    // cube. Keep the adaptive pixel budget calibrated to the remaining exact
+    // intersection work rather than restoring the old off-screen volume load.
+    if (volumes.size() > 4500U || coverage > 1050000U) {
       maximumWidth = std::min(maximumWidth, 104);
-    } else if (volumes.size() > 5000U) {
+    } else if (volumes.size() > 3200U || coverage > 850000U) {
       maximumWidth = std::min(maximumWidth, 120);
-    } else if (volumes.size() > 3500U) {
+    } else if (volumes.size() > 2200U || coverage > 600000U) {
       maximumWidth = std::min(maximumWidth, 136);
     }
   }

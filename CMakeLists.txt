@@ -87,6 +87,7 @@ add_library(proj4d_core
     src/player_motion.cpp
     src/player_motion2d.cpp
     src/player_motion3d.cpp
+    src/render_chunks.cpp
     src/render_geometry.cpp
     src/render2d.cpp
     src/render3d.cpp

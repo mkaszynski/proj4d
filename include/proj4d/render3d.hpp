@@ -11,7 +11,8 @@
 
 namespace proj4d {
 
-inline constexpr int renderBlockRadius3D = 8;
+inline constexpr int renderChunkRadius3D = 2;
+inline constexpr int renderBlockRadius3D = renderChunkRadius3D * chunkSize;
 inline constexpr std::array<std::array<std::uint8_t, 3>, 3> visionFaceColors3D{{
     {225, 85, 85},
     {85, 220, 110},
