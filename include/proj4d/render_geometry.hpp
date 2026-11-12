@@ -74,6 +74,11 @@ buildVisibleBoundaryCells(const BlockWorld &world, const BlockCoord &center,
 buildVisibleBoundaryCells(const VisibilityGrid4D &grid,
                           const BlockCoord &center,
                           int radius = renderBlockRadius);
+[[nodiscard]] std::vector<VisibleBoundaryCell4D>
+buildVisibleBoundaryCellsIncremental(
+    const VisibilityGrid4D &grid, const BlockCoord &center, int radius,
+    std::span<const VisibleBoundaryCell4D> previousCells,
+    const BlockCoord &previousCenter, int previousRadius);
 [[nodiscard]] std::vector<FeatureEdge4D>
 buildFeatureEdges(const BlockWorld &world, const BlockCoord &center,
                   int radius = renderBlockRadius);

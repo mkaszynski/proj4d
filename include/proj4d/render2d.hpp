@@ -12,7 +12,9 @@
 namespace proj4d {
 
 inline constexpr int visionLineWidthDivisor = 10;
-inline constexpr int terrainRenderDistance2D = 24;
+inline constexpr int terrainRenderChunkRadius2D = 4;
+inline constexpr int terrainRenderDistance2D =
+    terrainRenderChunkRadius2D * chunkSize;
 inline constexpr std::array<std::array<std::uint8_t, 3>, 2> visionAxisColors2D{{
     {150, 245, 165},
     {245, 140, 140},

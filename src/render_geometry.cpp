@@ -5,7 +5,7 @@
 #include <bitset>
 #include <cmath>
 #include <limits>
-#include <map>
+#include <unordered_map>
 #include <utility>
 
 namespace proj4d {
@@ -123,7 +123,16 @@ struct EdgeKey {
   BlockCoord lower{};
   int axis{};
 
-  [[nodiscard]] auto operator<=>(const EdgeKey &) const = default;
+  [[nodiscard]] bool operator==(const EdgeKey &) const = default;
+};
+
+struct EdgeKeyHash {
+  [[nodiscard]] std::size_t operator()(const EdgeKey &key) const {
+    const std::size_t coordinate = BlockCoordHash{}(key.lower);
+    const std::size_t axis = std::hash<int>{}(key.axis);
+    return coordinate ^
+           (axis + 0x9e3779b9U + (coordinate << 6U) + (coordinate >> 2U));
+  }
 };
 
 struct EdgeIncidence {
@@ -419,7 +428,8 @@ std::vector<FeatureEdge4D> buildFeatureEdges(const BlockWorld &world,
 
 std::vector<FeatureEdge4D>
 buildFeatureEdges(std::span<const VisibleBoundaryCell4D> cells) {
-  std::map<EdgeKey, EdgeIncidence> incidences;
+  std::unordered_map<EdgeKey, EdgeIncidence, EdgeKeyHash> incidences;
+  incidences.reserve(cells.size() * 3U);
   for (const VisibleBoundaryCell4D &cell : cells) {
     const auto axes = cellAxes(cell.axis);
     const std::size_t normalIndex =
@@ -480,6 +490,64 @@ buildVisibleBoundaryCells(const VisibilityGrid4D &grid,
       for (int y = center.y - radius; y <= center.y + radius; ++y) {
         for (int x = center.x - radius; x <= center.x + radius; ++x) {
           const BlockCoord block{x, y, z, w};
+          const BlockId material = grid.blockAt(block);
+          const bool solid = proj4d::isSolid(material);
+          const bool fluid = isFluid(material);
+          if (!solid && !fluid) {
+            continue;
+          }
+          for (int axis = 0; axis < 4; ++axis) {
+            for (const int side : {-1, 1}) {
+              BlockCoord neighbor = block;
+              neighbor[static_cast<std::size_t>(axis)] += side;
+              const BlockId neighborMaterial = grid.blockAt(neighbor);
+              const bool boundaryHidden =
+                  solid ? proj4d::isSolid(neighborMaterial)
+                        : neighborMaterial == material ||
+                              proj4d::isSolid(neighborMaterial);
+              if (!boundaryHidden) {
+                visibleCells.push_back(
+                    {block, axis, side, material,
+                     boundaryAmbientOcclusion(grid, block, axis, side)});
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return visibleCells;
+}
+
+std::vector<VisibleBoundaryCell4D> buildVisibleBoundaryCellsIncremental(
+    const VisibilityGrid4D &grid, const BlockCoord &center, int radius,
+    std::span<const VisibleBoundaryCell4D> previousCells,
+    const BlockCoord &previousCenter, int previousRadius) {
+  if (radius < 0 || previousRadius < 0) {
+    return buildVisibleBoundaryCells(grid, center, radius);
+  }
+  const auto inside = [](const BlockCoord &block, const BlockCoord &origin,
+                         int range) {
+    return block.x >= origin.x - range && block.x <= origin.x + range &&
+           block.y >= origin.y - range && block.y <= origin.y + range &&
+           block.z >= origin.z - range && block.z <= origin.z + range &&
+           block.w >= origin.w - range && block.w <= origin.w + range;
+  };
+  std::vector<VisibleBoundaryCell4D> visibleCells;
+  visibleCells.reserve(previousCells.size());
+  for (const VisibleBoundaryCell4D &cell : previousCells) {
+    if (inside(cell.block, center, radius)) {
+      visibleCells.push_back(cell);
+    }
+  }
+  for (int w = center.w - radius; w <= center.w + radius; ++w) {
+    for (int z = center.z - radius; z <= center.z + radius; ++z) {
+      for (int y = center.y - radius; y <= center.y + radius; ++y) {
+        for (int x = center.x - radius; x <= center.x + radius; ++x) {
+          const BlockCoord block{x, y, z, w};
+          if (inside(block, previousCenter, previousRadius)) {
+            continue;
+          }
           const BlockId material = grid.blockAt(block);
           const bool solid = proj4d::isSolid(material);
           const bool fluid = isFluid(material);

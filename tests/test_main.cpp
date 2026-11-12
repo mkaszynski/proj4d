@@ -9,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "hypercraft/world/terrain_generator.hpp"
@@ -25,6 +26,7 @@
 #include "proj4d/player_motion3d.hpp"
 #include "proj4d/render2d.hpp"
 #include "proj4d/render3d.hpp"
+#include "proj4d/render_chunks.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/terrain_generator.hpp"
 #include "proj4d/texture_atlas.hpp"
@@ -1034,6 +1036,37 @@ void testDenseVisibilityGridMatchesWorld() {
   }
   expect(sameBoundaries,
          "cached 4D occupancy extracts the same visible solid boundaries");
+
+  const auto canonicalBoundaries = [](const auto &cells) {
+    std::vector<std::tuple<int, int, int, int, int, int, int, std::uint32_t>>
+        canonical;
+    canonical.reserve(cells.size());
+    for (const proj4d::VisibleBoundaryCell4D &cell : cells) {
+      canonical.emplace_back(
+          cell.block.x, cell.block.y, cell.block.z, cell.block.w, cell.axis,
+          cell.side, static_cast<int>(cell.material), cell.ambientOcclusion);
+    }
+    std::ranges::sort(canonical);
+    return canonical;
+  };
+  const auto firstCells =
+      proj4d::buildVisibleBoundaryCells(first, firstCenter, 1);
+  const auto incremental = proj4d::buildVisibleBoundaryCellsIncremental(
+      shifted, secondCenter, 1, firstCells, firstCenter, 1);
+  expect(canonicalBoundaries(incremental) == canonicalBoundaries(direct),
+         "sliding the 4D render window reuses topology without changing any "
+         "boundary or ambient-occlusion result");
+
+  const proj4d::VisibilityGrid4D expanded =
+      proj4d::buildVisibilityGrid4D(world, secondCenter, 2, &shifted);
+  const auto directExpanded =
+      proj4d::buildVisibleBoundaryCells(expanded, secondCenter, 2);
+  const auto incrementalExpanded = proj4d::buildVisibleBoundaryCellsIncremental(
+      expanded, secondCenter, 2, direct, secondCenter, 1);
+  expect(canonicalBoundaries(incrementalExpanded) ==
+             canonicalBoundaries(directExpanded),
+         "an expanding 4D render window extracts only its new shell without "
+         "changing exact topology");
   expect(
       shifted.isSolid({1000, 1000, 1000, 1000}),
       "positions outside prepared visibility data are conservatively opaque");
@@ -1789,6 +1822,14 @@ void testDimensionNativeTexturesAndAmbientOcclusion() {
              !texturedVolumes.empty() && texturedVolumes[0].hasSourceTexture,
          "4D texture reconstruction data is built only for the textured "
          "high-resolution slice");
+
+  const proj4d::VisibleBoundaryCell4D offVisionCell{
+      {100, 0, 2, 0}, 0, -1, proj4d::BlockId::stone};
+  expect(
+      proj4d::projectBoundaryVolumes4D(std::array{offVisionCell}, textureCamera)
+          .empty(),
+      "a projected boundary volume wholly outside the vision cube is "
+      "discarded before exact compositing");
 }
 
 void testAveragedFourDimensionalVolumeColor() {
@@ -2317,6 +2358,38 @@ void testVisionGeometryIsBounded() {
   constexpr int diameter = proj4d::renderBlockRadius * 2 + 1;
   expect(diameter * diameter * diameter * diameter < 30000,
          "render extraction has a fixed bounded 4D work region");
+  expect(proj4d::terrainRenderChunkRadius2D == 4 &&
+             proj4d::terrainRenderDistance2D == 64,
+         "2D vision uses a substantially larger four-chunk radial field");
+  expect(proj4d::renderChunkRadius3D == 2 && proj4d::renderBlockRadius3D == 32,
+         "3D vision uses a substantially larger two-chunk radial field");
+  const proj4d::ChunkCoord chunkCenter{7, -3, 5, 11};
+  const auto chunks2D = proj4d::planRenderChunks2D(
+      chunkCenter, proj4d::terrainRenderChunkRadius2D);
+  const auto chunks3D =
+      proj4d::planRenderChunks3D(chunkCenter, proj4d::renderChunkRadius3D);
+  const auto orderedByDistance = [&](const auto &chunks, int dimensions) {
+    int previousDistance = -1;
+    for (const proj4d::ChunkCoord chunk : chunks) {
+      const int dx = chunk.x - chunkCenter.x;
+      const int dy = chunk.y - chunkCenter.y;
+      const int dz = dimensions == 3 ? chunk.z - chunkCenter.z : 0;
+      const int distance = dx * dx + dy * dy + dz * dz;
+      if (distance < previousDistance) {
+        return false;
+      }
+      previousDistance = distance;
+    }
+    return true;
+  };
+  expect(chunks2D.size() == 49U &&
+             chunks2D.front() == proj4d::ChunkCoord{7, -3, 0, 0} &&
+             orderedByDistance(chunks2D, 2),
+         "2D chunk streaming is bounded, radial, and nearest-first");
+  expect(chunks3D.size() == 33U &&
+             chunks3D.front() == proj4d::ChunkCoord{7, -3, 5, 0} &&
+             orderedByDistance(chunks3D, 3),
+         "3D chunk streaming is bounded, radial, and nearest-first");
 }
 
 } // namespace

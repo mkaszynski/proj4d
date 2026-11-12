@@ -29,6 +29,7 @@
 #include "proj4d/player_motion3d.hpp"
 #include "proj4d/render2d.hpp"
 #include "proj4d/render3d.hpp"
+#include "proj4d/render_chunks.hpp"
 #include "proj4d/render_geometry.hpp"
 #include "proj4d/texture_atlas.hpp"
 #include "proj4d/view_status.hpp"
@@ -1401,7 +1402,9 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
       geometryCache.worldRevision != world.revision() ||
       geometryCache.radius < renderBlockRadius) {
     const int requestedRadius =
-        geometryCache.initialized ? renderBlockRadius : initialRadius;
+        geometryCache.initialized
+            ? std::min(renderBlockRadius, geometryCache.radius + 1)
+            : initialRadius;
     const bool ready = world.prepareRegion(center, requestedRadius);
     if (!geometryCache.initialized) {
       static_cast<void>(world.prepareRegion(center, renderBlockRadius));
@@ -1409,14 +1412,21 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
     if (ready) {
       const bool mayReuse = geometryCache.initialized &&
                             geometryCache.worldRevision == world.revision();
+      const BlockCoord previousCenter = geometryCache.center;
+      const int previousRadius = geometryCache.radius;
       geometryCache.visibilityGrid = buildVisibilityGrid4D(
           world, center, requestedRadius,
           mayReuse ? &geometryCache.visibilityGrid : nullptr);
       geometryCache.center = center;
       geometryCache.radius = requestedRadius;
       geometryCache.worldRevision = world.revision();
-      geometryCache.boundaryCells = buildVisibleBoundaryCells(
-          geometryCache.visibilityGrid, center, requestedRadius);
+      geometryCache.boundaryCells =
+          mayReuse
+              ? buildVisibleBoundaryCellsIncremental(
+                    geometryCache.visibilityGrid, center, requestedRadius,
+                    geometryCache.boundaryCells, previousCenter, previousRadius)
+              : buildVisibleBoundaryCells(geometryCache.visibilityGrid, center,
+                                          requestedRadius);
       geometryCache.edges = buildFeatureEdges(geometryCache.boundaryCells);
       geometryCache.initialized = true;
       geometryCache.volumeInitialized = false;
@@ -1588,7 +1598,7 @@ struct VisionGeometry2D {
   std::uint64_t startupCounter{SDL_GetPerformanceCounter()};
   bool initialStartupReported{};
   bool fullStartupReported{};
-  BlockCoord2D center{};
+  ChunkCoord centerChunk{};
   int radius{-1};
   std::uint64_t worldRevision{std::numeric_limits<std::uint64_t>::max()};
   bool initialized{};
@@ -1596,20 +1606,6 @@ struct VisionGeometry2D {
       chunkEdges;
   std::vector<VisibleEdge2D> edges;
 };
-
-std::vector<ChunkCoord> chunksFor2D(const BlockCoord2D &center, int radius) {
-  const ChunkCoord first =
-      chunkCoordForBlock({center.x - radius, center.y - radius, 0, 0});
-  const ChunkCoord last =
-      chunkCoordForBlock({center.x + radius, center.y + radius, 0, 0});
-  std::vector<ChunkCoord> chunks;
-  for (int y = first.y; y <= last.y; ++y) {
-    for (int x = first.x; x <= last.x; ++x) {
-      chunks.push_back({x, y, 0, 0});
-    }
-  }
-  return chunks;
-}
 
 bool chunksTouch2D(const ChunkCoord &left, const ChunkCoord &right) {
   return left.w == right.w && left.z == right.z &&
@@ -1658,18 +1654,21 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
   const BlockCoord2D center = containingBlock(camera.position);
-  constexpr int initialRadius = 8;
-  if (!vision.initialized || vision.center != center ||
+  const ChunkCoord centerChunk = chunkCoordForBlock({center.x, center.y, 0, 0});
+  constexpr int initialRadius = 0;
+  if (!vision.initialized || vision.centerChunk != centerChunk ||
       vision.worldRevision != world.revision() ||
-      vision.radius < terrainRenderDistance2D) {
+      vision.radius < terrainRenderChunkRadius2D) {
     const int requestedRadius =
-        vision.initialized ? terrainRenderDistance2D : initialRadius;
+        vision.initialized
+            ? std::min(terrainRenderChunkRadius2D, vision.radius + 1)
+            : initialRadius;
     const std::vector<ChunkCoord> visibleChunks =
-        chunksFor2D(center, requestedRadius);
+        planRenderChunks2D(centerChunk, requestedRadius);
     const bool ready = world.prepareChunks(visibleChunks);
     if (!vision.initialized) {
-      static_cast<void>(
-          world.prepareChunks(chunksFor2D(center, terrainRenderDistance2D)));
+      static_cast<void>(world.prepareChunks(
+          planRenderChunks2D(centerChunk, terrainRenderChunkRadius2D)));
     }
     if (ready) {
       if (vision.worldRevision != world.revision()) {
@@ -1698,24 +1697,15 @@ void render(SDL_Renderer *renderer, const BlockWorld2D &world,
       }
       vision.chunkEdges = std::move(retained);
       vision.edges.clear();
-      const int minimumX = center.x - requestedRadius;
-      const int maximumX = center.x + requestedRadius;
-      const int minimumY = center.y - requestedRadius;
-      const int maximumY = center.y + requestedRadius;
       for (const auto &[chunk, edges] : vision.chunkEdges) {
         static_cast<void>(chunk);
-        for (const VisibleEdge2D &edge : edges) {
-          if (edge.block.x >= minimumX && edge.block.x <= maximumX &&
-              edge.block.y >= minimumY && edge.block.y <= maximumY) {
-            vision.edges.push_back(edge);
-          }
-        }
+        vision.edges.insert(vision.edges.end(), edges.begin(), edges.end());
       }
-      vision.center = center;
+      vision.centerChunk = centerChunk;
       vision.radius = requestedRadius;
       vision.worldRevision = world.revision();
       vision.initialized = true;
-      reportStartupStage("2D", requestedRadius, terrainRenderDistance2D,
+      reportStartupStage("2D", requestedRadius, terrainRenderChunkRadius2D,
                          world.loadedChunkCount(), vision.startupCounter,
                          vision.initialStartupReported,
                          vision.fullStartupReported);
@@ -1763,7 +1753,7 @@ struct VisionGeometry3D {
   std::uint64_t startupCounter{SDL_GetPerformanceCounter()};
   bool initialStartupReported{};
   bool fullStartupReported{};
-  BlockCoord3D center{};
+  ChunkCoord centerChunk{};
   int radius{-1};
   std::uint64_t worldRevision{std::numeric_limits<std::uint64_t>::max()};
   bool geometryInitialized{};
@@ -1771,22 +1761,6 @@ struct VisionGeometry3D {
       chunkFaces;
   std::vector<VisibleFace3D> faces;
 };
-
-std::vector<ChunkCoord> chunksFor3D(const BlockCoord3D &center, int radius) {
-  const ChunkCoord first = chunkCoordForBlock(
-      {center.x - radius, center.y - radius, center.z - radius, 0});
-  const ChunkCoord last = chunkCoordForBlock(
-      {center.x + radius, center.y + radius, center.z + radius, 0});
-  std::vector<ChunkCoord> chunks;
-  for (int z = first.z; z <= last.z; ++z) {
-    for (int y = first.y; y <= last.y; ++y) {
-      for (int x = first.x; x <= last.x; ++x) {
-        chunks.push_back({x, y, z, 0});
-      }
-    }
-  }
-  return chunks;
-}
 
 bool chunksTouch3D(const ChunkCoord &left, const ChunkCoord &right) {
   return left.w == right.w && std::abs(left.x - right.x) +
@@ -1876,18 +1850,22 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
             const Camera3D &camera, int width, int height,
             VisionGeometry3D &vision) {
   const BlockCoord3D center = containingBlock(camera.position);
-  constexpr int initialRadius = 3;
-  if (!vision.geometryInitialized || vision.center != center ||
+  const ChunkCoord centerChunk =
+      chunkCoordForBlock({center.x, center.y, center.z, 0});
+  constexpr int initialRadius = 0;
+  if (!vision.geometryInitialized || vision.centerChunk != centerChunk ||
       vision.worldRevision != world.revision() ||
-      vision.radius < renderBlockRadius3D) {
+      vision.radius < renderChunkRadius3D) {
     const int requestedRadius =
-        vision.geometryInitialized ? renderBlockRadius3D : initialRadius;
+        vision.geometryInitialized
+            ? std::min(renderChunkRadius3D, vision.radius + 1)
+            : initialRadius;
     const std::vector<ChunkCoord> visibleChunks =
-        chunksFor3D(center, requestedRadius);
+        planRenderChunks3D(centerChunk, requestedRadius);
     const bool ready = world.prepareChunks(visibleChunks);
     if (!vision.geometryInitialized) {
-      static_cast<void>(
-          world.prepareChunks(chunksFor3D(center, renderBlockRadius3D)));
+      static_cast<void>(world.prepareChunks(
+          planRenderChunks3D(centerChunk, renderChunkRadius3D)));
     }
     if (ready) {
       if (vision.worldRevision != world.revision()) {
@@ -1916,27 +1894,15 @@ bool render(SDL_Renderer *renderer, const BlockWorld3D &world,
       }
       vision.chunkFaces = std::move(retained);
       vision.faces.clear();
-      const BlockCoord3D minimum{center.x - requestedRadius,
-                                 center.y - requestedRadius,
-                                 center.z - requestedRadius};
-      const BlockCoord3D maximum{center.x + requestedRadius,
-                                 center.y + requestedRadius,
-                                 center.z + requestedRadius};
       for (const auto &[chunk, faces] : vision.chunkFaces) {
         static_cast<void>(chunk);
-        for (const VisibleFace3D &face : faces) {
-          if (face.block.x >= minimum.x && face.block.x <= maximum.x &&
-              face.block.y >= minimum.y && face.block.y <= maximum.y &&
-              face.block.z >= minimum.z && face.block.z <= maximum.z) {
-            vision.faces.push_back(face);
-          }
-        }
+        vision.faces.insert(vision.faces.end(), faces.begin(), faces.end());
       }
-      vision.center = center;
+      vision.centerChunk = centerChunk;
       vision.radius = requestedRadius;
       vision.worldRevision = world.revision();
       vision.geometryInitialized = true;
-      reportStartupStage("3D", requestedRadius, renderBlockRadius3D,
+      reportStartupStage("3D", requestedRadius, renderChunkRadius3D,
                          world.loadedChunkCount(), vision.startupCounter,
                          vision.initialStartupReported,
                          vision.fullStartupReported);
@@ -2245,11 +2211,11 @@ int runThreeDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
       SDL_SetWindowTitle(window, title.c_str());
     }
     if (smokeTest &&
-        (!vision.geometryInitialized || vision.radius < renderBlockRadius3D)) {
+        (!vision.geometryInitialized || vision.radius < renderChunkRadius3D)) {
       SDL_Delay(1U);
     }
     if (smokeTest && frameCount >= 3 && vision.geometryInitialized &&
-        vision.radius == renderBlockRadius3D) {
+        vision.radius == renderChunkRadius3D) {
       if (!saveRendererBitmap(renderer, width, height, smokeOutput)) {
         std::cerr << "Could not save 3D smoke image: " << SDL_GetError()
                   << '\n';
@@ -2466,11 +2432,11 @@ int runTwoDimensionalSession(SDL_Renderer *renderer, SDL_Window *window,
       SDL_SetWindowTitle(window, title.c_str());
     }
     if (smokeTest &&
-        (!vision.initialized || vision.radius < terrainRenderDistance2D)) {
+        (!vision.initialized || vision.radius < terrainRenderChunkRadius2D)) {
       SDL_Delay(1U);
     }
     if (smokeTest && frameCount >= 3 && vision.initialized &&
-        vision.radius == terrainRenderDistance2D) {
+        vision.radius == terrainRenderChunkRadius2D) {
       if (!saveRendererBitmap(renderer, width, height, smokeOutput)) {
         std::cerr << "Could not save 2D smoke image: " << SDL_GetError()
                   << '\n';
