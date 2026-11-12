@@ -44,6 +44,12 @@ Apply these invariants to every change in the Proj4D repository.
 - Represent each block as a tesseract with eight cubic boundary cells.
 - Render a native 4D perspective view into a solid 3D vision volume. Do not
   replace the view with 3D slices, independent 3D worlds, or fake depth.
+- Keep that solid volume as the default and let `M` toggle an optional centered
+  square cross-section of the already projected 3D vision volume. The slice
+  must sample projected `z=0`, retain the complete 4D wireframe and gameplay,
+  show sky only inside its square, and never become a 3D world slice. Render it
+  as a higher-resolution projected-space texture and remap that cached square
+  during external orbit without recomputing its 4D contents.
 - Keep the two-stage display boundary explicit: project the 4D world into the
   3D vision cube, then project that cube onto the user's 2D display.
 - Preserve the filled 4D projection as well as its crisp wireframe. Intersect

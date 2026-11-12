@@ -15,6 +15,14 @@ struct VolumeDisplayCamera {
   double distance{3.8};
 };
 
+enum class VolumeViewMode { Solid, CenterSlice };
+
+[[nodiscard]] constexpr VolumeViewMode
+toggledVolumeViewMode(VolumeViewMode current) {
+  return current == VolumeViewMode::Solid ? VolumeViewMode::CenterSlice
+                                          : VolumeViewMode::Solid;
+}
+
 struct ProjectedBoundaryVolume4D {
   std::array<Vec3, 20> vertices{};
   std::size_t vertexCount{8U};
@@ -34,6 +42,7 @@ struct AveragedVolumeImage {
 };
 
 inline constexpr int maximumVolumeImageWidth = 160;
+inline constexpr int maximumSliceImageWidth = 320;
 inline constexpr int maximumProjectedBoundaryVolumes = 8192;
 
 [[nodiscard]] int boundaryBrightnessPercent4D(int axis, int side);
@@ -49,6 +58,7 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
                        const VolumeDisplayCamera &camera, int displayWidth,
                        int displayHeight,
                        int maximumWidth = maximumVolumeImageWidth,
-                       BlockId immersionMaterial = BlockId::air);
+                       BlockId immersionMaterial = BlockId::air,
+                       VolumeViewMode viewMode = VolumeViewMode::Solid);
 
 } // namespace proj4d

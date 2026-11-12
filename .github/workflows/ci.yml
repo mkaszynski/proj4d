@@ -30,6 +30,7 @@ jobs:
           ./build/proj4d --smoke-test --smoke-output build/4d-flat.bmp
           ./build/proj4d --low-smoke-test --smoke-output build/4d-low.bmp
           ./build/proj4d --high-smoke-test --smoke-output build/4d-high.bmp
+          ./build/proj4d --4d-slice-smoke-test --smoke-output build/4d-slice.bmp
           ./build/proj4d --3d-smoke-test --smoke-output build/3d-flat.bmp
           ./build/proj4d --3d-low-smoke-test --smoke-output build/3d-low.bmp
           ./build/proj4d --3d-high-smoke-test --smoke-output build/3d-high.bmp
@@ -45,6 +46,7 @@ jobs:
           test -s build/4d-flat.bmp
           test -s build/4d-low.bmp
           test -s build/4d-high.bmp
+          test -s build/4d-slice.bmp
           test -s build/3d-flat.bmp
           test -s build/3d-low.bmp
           test -s build/3d-high.bmp

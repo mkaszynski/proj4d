@@ -85,6 +85,7 @@ struct FeatureGeometryCache {
   double volumeDisplayDistance{};
   int volumeDisplayWidth{};
   int volumeDisplayHeight{};
+  VolumeViewMode volumeViewMode{VolumeViewMode::Solid};
   bool volumeInitialized{};
 };
 
@@ -403,6 +404,55 @@ void drawVisionCubeSky(SDL_Renderer *renderer, const DisplayCamera &display,
   }
   static_cast<void>(SDL_RenderGeometry(
       renderer, nullptr, vertices.data(), static_cast<int>(vertices.size()),
+      indices.data(), static_cast<int>(indices.size())));
+}
+
+void drawProjectionSlice(SDL_Renderer *renderer, SDL_Texture *texture,
+                         const DisplayCamera &display, int width, int height) {
+  // SDL interpolates texture coordinates affinely, so use a small fixed mesh
+  // to closely follow the perspective projection without regenerating the
+  // high-resolution slice texture while the user orbits the vision cube.
+  constexpr int subdivisions = 24;
+  constexpr int rowSize = subdivisions + 1;
+  std::array<SDL_Vertex, static_cast<std::size_t>(rowSize * rowSize)>
+      vertices{};
+  for (int y = 0; y <= subdivisions; ++y) {
+    const double textureY = static_cast<double>(y) / subdivisions;
+    for (int x = 0; x <= subdivisions; ++x) {
+      const double textureX = static_cast<double>(x) / subdivisions;
+      const auto point =
+          projectForDisplay({-1.0 + textureX * 2.0, 1.0 - textureY * 2.0, 0.0},
+                            display, width, height);
+      if (!point) {
+        return;
+      }
+      SDL_Vertex &vertex = vertices[static_cast<std::size_t>(y * rowSize + x)];
+      vertex.position = {static_cast<float>(point->x),
+                         static_cast<float>(point->y)};
+      vertex.color = {255, 255, 255, 255};
+      vertex.tex_coord = {static_cast<float>(textureX),
+                          static_cast<float>(textureY)};
+    }
+  }
+  std::array<int, static_cast<std::size_t>(subdivisions * subdivisions * 6)>
+      indices{};
+  std::size_t index = 0U;
+  for (int y = 0; y < subdivisions; ++y) {
+    for (int x = 0; x < subdivisions; ++x) {
+      const int topLeft = y * rowSize + x;
+      const int topRight = topLeft + 1;
+      const int bottomLeft = topLeft + rowSize;
+      const int bottomRight = bottomLeft + 1;
+      indices[index++] = topLeft;
+      indices[index++] = topRight;
+      indices[index++] = bottomLeft;
+      indices[index++] = topRight;
+      indices[index++] = bottomRight;
+      indices[index++] = bottomLeft;
+    }
+  }
+  static_cast<void>(SDL_RenderGeometry(
+      renderer, texture, vertices.data(), static_cast<int>(vertices.size()),
       indices.data(), static_cast<int>(indices.size())));
 }
 
@@ -949,7 +999,8 @@ void drawQuickStorage(SDL_Renderer *renderer, const InventoryState &inventory,
   }
 }
 
-void drawStatusBar(SDL_Renderer *renderer, const Camera4D &camera, int width) {
+void drawStatusBar(SDL_Renderer *renderer, const Camera4D &camera, int width,
+                   VolumeViewMode viewMode) {
   const int scale = width >= 820 ? 2 : 1;
   const int barHeight = 9 * scale + 4;
   const SDL_Rect bar{0, 0, width, barHeight};
@@ -957,8 +1008,12 @@ void drawStatusBar(SDL_Renderer *renderer, const Camera4D &camera, int width) {
   SDL_RenderFillRect(renderer, &bar);
   SDL_SetRenderDrawColor(renderer, 55, 78, 102, 255);
   SDL_RenderDrawLine(renderer, 0, barHeight - 1, width, barHeight - 1);
-  drawBitmapText(renderer, formatViewStatus(camera), 4 * scale, 2 * scale,
-                 scale, {224, 236, 248});
+  const std::string status =
+      formatViewStatus(camera) + (viewMode == VolumeViewMode::CenterSlice
+                                      ? " | VIEW:SLICE"
+                                      : " | VIEW:SOLID");
+  drawBitmapText(renderer, status, 4 * scale, 2 * scale, scale,
+                 {224, 236, 248});
 }
 
 std::string formatViewStatus(const Camera2D &camera) {
@@ -1255,7 +1310,8 @@ std::optional<TerrainMode> chooseTerrainMode(SDL_Renderer *renderer,
 
 void render(SDL_Renderer *renderer, const BlockWorld &world,
             const Camera4D &camera, const DisplayCamera &display, int width,
-            int height, FeatureGeometryCache &geometryCache) {
+            int height, VolumeViewMode viewMode,
+            FeatureGeometryCache &geometryCache) {
   SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
   SDL_RenderClear(renderer);
   const bool profile = std::getenv("PROJ4D_PROFILE_4D") != nullptr;
@@ -1306,11 +1362,16 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
        !sameVector(geometryCache.volumeImageY, camera.imageY) ||
        !sameVector(geometryCache.volumeImageZ, camera.imageZ) ||
        !sameVector(geometryCache.volumeForward, camera.forward) ||
-       geometryCache.volumeDisplayYaw != display.yaw ||
-       geometryCache.volumeDisplayPitch != display.pitch ||
-       geometryCache.volumeDisplayDistance != display.distance ||
-       geometryCache.volumeDisplayWidth != width ||
-       geometryCache.volumeDisplayHeight != height);
+       geometryCache.volumeViewMode != viewMode ||
+       (viewMode == VolumeViewMode::Solid &&
+        (geometryCache.volumeDisplayYaw != display.yaw ||
+         geometryCache.volumeDisplayPitch != display.pitch ||
+         geometryCache.volumeDisplayDistance != display.distance ||
+         geometryCache.volumeDisplayWidth != width ||
+         geometryCache.volumeDisplayHeight != height)) ||
+       (viewMode == VolumeViewMode::CenterSlice &&
+        geometryCache.volumeWidth !=
+            std::min({width, height, maximumSliceImageWidth})));
   if (volumeChanged) {
     const std::uint64_t volumeStart = SDL_GetPerformanceCounter();
     std::vector<ProjectedBoundaryVolume4D> volumes =
@@ -1327,8 +1388,10 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
     volumes.insert(volumes.end(), cloudVolumes.begin(), cloudVolumes.end());
     const AveragedVolumeImage volumeImage = renderAveragedVolume4D(
         volumes, {display.yaw, display.pitch, display.distance}, width, height,
-        maximumVolumeImageWidth,
-        geometryCache.visibilityGrid.blockAt(containingBlock(camera.position)));
+        viewMode == VolumeViewMode::CenterSlice ? maximumSliceImageWidth
+                                                : maximumVolumeImageWidth,
+        geometryCache.visibilityGrid.blockAt(containingBlock(camera.position)),
+        viewMode);
     if (geometryCache.volumeTexture == nullptr ||
         geometryCache.volumeWidth != volumeImage.width ||
         geometryCache.volumeHeight != volumeImage.height) {
@@ -1357,6 +1420,7 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
     geometryCache.volumeDisplayDistance = display.distance;
     geometryCache.volumeDisplayWidth = width;
     geometryCache.volumeDisplayHeight = height;
+    geometryCache.volumeViewMode = viewMode;
     geometryCache.volumeInitialized = true;
     if (profile) {
       const double frequency =
@@ -1372,11 +1436,18 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
                 << ", volumes=" << volumes.size() << '\n';
     }
   }
-  drawVisionCubeSky(renderer, display, width, height);
+  if (viewMode == VolumeViewMode::Solid) {
+    drawVisionCubeSky(renderer, display, width, height);
+  }
   if (geometryCache.volumeTexture != nullptr) {
-    const SDL_Rect destination{0, 0, width, height};
-    SDL_RenderCopy(renderer, geometryCache.volumeTexture, nullptr,
-                   &destination);
+    if (viewMode == VolumeViewMode::CenterSlice) {
+      drawProjectionSlice(renderer, geometryCache.volumeTexture, display, width,
+                          height);
+    } else {
+      const SDL_Rect destination{0, 0, width, height};
+      SDL_RenderCopy(renderer, geometryCache.volumeTexture, nullptr,
+                     &destination);
+    }
   }
   drawVisionCube(renderer, display, width, height);
   const bool linesChanged =
@@ -1427,7 +1498,7 @@ void render(SDL_Renderer *renderer, const BlockWorld &world,
   }
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
   drawCrosshair(renderer, display, width, height);
-  drawStatusBar(renderer, camera, width);
+  drawStatusBar(renderer, camera, width, viewMode);
 }
 
 void render(SDL_Renderer *renderer, const BlockWorld2D &world,
@@ -2474,7 +2545,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   const std::string worldName = terrainModeName(*selectedTerrain);
   SDL_SetWindowTitle(window, ("Proj4D | " + worldName +
                               " World | Mouse: 4D look | Tab: vertical | "
-                              "Ctrl: orbit | Shift: sneak | WASDQE move")
+                              "Ctrl: orbit | M: slice | Shift: sneak | "
+                              "WASDQE move")
                                  .c_str());
   GameSession game(*selectedTerrain, PlayDimension::Four);
   BlockWorld &world = game.world();
@@ -2517,6 +2589,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   InventoryUiState inventoryUi;
   InventoryRightGesture inventoryRightGesture;
   FourDQuickSelectionState quickSelection;
+  VolumeViewMode volumeViewMode = VolumeViewMode::Solid;
   if (mode == RunMode::FourDInventorySmokeTest) {
     inventoryUi.open = true;
     InventoryState preview;
@@ -2537,6 +2610,22 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
   bool miningHeld = false;
   std::uint64_t previousCounter = SDL_GetPerformanceCounter();
 
+  if (mode == RunMode::FourDSliceSmokeTest) {
+    SDL_Event toggleEvent{};
+    toggleEvent.type = SDL_KEYDOWN;
+    toggleEvent.key.keysym.sym = SDLK_m;
+    toggleEvent.key.repeat = 0;
+    if (SDL_PushEvent(&toggleEvent) < 0) {
+      std::cerr << "Could not queue 4D slice toggle: " << SDL_GetError()
+                << '\n';
+      SDL_DestroyTexture(geometryCache.volumeTexture);
+      SDL_DestroyRenderer(renderer);
+      SDL_DestroyWindow(window);
+      SDL_Quit();
+      return 1;
+    }
+  }
+
   if (!smokeTest) {
     SDL_SetRelativeMouseMode(SDL_TRUE);
     std::cout << "Proj4D " << worldName << " world\n"
@@ -2552,6 +2641,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
               << "  Hold Tab + mouse up/down: vertical look\n"
               << "  Hold Ctrl + mouse: orbit the solid 3D vision cube\n"
               << "  Mouse wheel: zoom the vision cube\n"
+              << "  M: toggle the solid projection or centered square slice\n"
               << "  1-3 then 1-9 rapidly: select a 4D hotbar layer and slot\n"
               << "  Left click: break a targeted tesseract\n"
               << "  Right click: build a tesseract\n"
@@ -2589,6 +2679,9 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
         cancelInventoryRightGesture(inventoryRightGesture);
         SDL_SetRelativeMouseMode(inventoryUi.open || smokeTest ? SDL_FALSE
                                                                : SDL_TRUE);
+      } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_m &&
+                 event.key.repeat == 0 && !inventoryUi.open) {
+        volumeViewMode = toggledVolumeViewMode(volumeViewMode);
       } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym >= SDLK_1 &&
                  event.key.keysym.sym <= SDLK_9 && event.key.repeat == 0) {
         InventoryState changed = game.inventory();
@@ -2724,7 +2817,8 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
     int width = initialWidth;
     int height = initialHeight;
     SDL_GetRendererOutputSize(renderer, &width, &height);
-    render(renderer, world, camera, display, width, height, geometryCache);
+    render(renderer, world, camera, display, width, height, volumeViewMode,
+           geometryCache);
     const std::uint64_t nowMilliseconds = SDL_GetTicks();
     const bool awaitingQuickSlot =
         quickSelection.pendingLayer >= 0 &&
@@ -2747,7 +2841,7 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
                                 std::to_string(world.loadedChunkCount()) +
                                 " | WASDQE move | Mouse: 4D look | "
                                 "Tab: vertical | Shift: sneak | "
-                                "Ctrl: orbit";
+                                "Ctrl: orbit | M: slice";
       SDL_SetWindowTitle(window, title.c_str());
     }
     if (smokeTest && (!geometryCache.initialized ||
@@ -2756,6 +2850,13 @@ int runApplication(RunMode mode, const std::string &smokeOutput) {
     }
     if (smokeTest && frameCount >= 3 && geometryCache.initialized &&
         geometryCache.radius == renderBlockRadius) {
+      if (mode == RunMode::FourDSliceSmokeTest &&
+          volumeViewMode != VolumeViewMode::CenterSlice) {
+        std::cerr << "4D slice smoke toggle did not activate\n";
+        frameCount = -1;
+        running = false;
+        continue;
+      }
       if (!saveRendererBitmap(renderer, width, height, smokeOutput)) {
         std::cerr << "Could not save smoke image: " << SDL_GetError() << '\n';
         frameCount = -1;

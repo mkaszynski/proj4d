@@ -115,6 +115,16 @@ buried face before performing the requested path-length average through the 3D
 vision cube. The result does not depend on block extraction order and does not
 sample or march through the infinite world.
 
+Pressing `M` switches the filled view to the centered `z=0` square of that
+projected 3D vision volume. This is a cross-section of the true 4D projection,
+not a lower-dimensional world slice: movement, targeting, source-depth
+occlusion, and the complete projected wireframe remain 4D. Empty points on the
+square remain sky colored, while everything outside it is black. Press `M`
+again to restore the default solid path-length view. The slice is rendered as a
+reusable `320x320` projected-space texture, twice the solid view's maximum
+linear resolution and four times its pixel count. Orbiting the vision cube
+remaps that cached square without recalculating its 4D contents.
+
 ## Build and run
 
 Proj4D requires CMake 3.24 or newer, a C++20 compiler, and SDL2. The repository
@@ -158,6 +168,7 @@ bitmaps for both menus and every playable combination:
 ./build/proj4d --2d-low-smoke-test --smoke-output 2d-low.bmp
 ./build/proj4d --2d-high-smoke-test --smoke-output 2d-high.bmp
 ./build/proj4d --4d-inventory-smoke-test --smoke-output 4d-inventory.bmp
+./build/proj4d --4d-slice-smoke-test --smoke-output 4d-slice.bmp
 ./build/proj4d --3d-inventory-smoke-test --smoke-output 3d-inventory.bmp
 ./build/proj4d --2d-inventory-smoke-test --smoke-output 2d-inventory.bmp
 ./build/proj4d --4d-fluid-smoke-test --smoke-output 4d-fluid.bmp
@@ -238,6 +249,7 @@ pixels turns the same gesture into cube rotation and suppresses the item click.
 | Hold `Tab` + mouse up/down | Vertical look; horizontal mouse motion is ignored |
 | Hold `Ctrl` + mouse | Orbit the solid 3D vision cube without changing the 4D view |
 | Mouse wheel | Zoom the external view of the vision cube |
+| `M` | Toggle between the solid projection and its centered square slice |
 | `T` | Open the rotatable 3D inventory/crafting cube |
 | Rapid `1`–`3`, then `1`–`9` | Select a depth layer and cell in the 3×3×3 quick-storage volume |
 | Left mouse button | Mine the targeted tesseract |
@@ -245,8 +257,9 @@ pixels turns the same gesture into cube rotation and suppresses the item click.
 | `Escape` | Close inventory, then quit |
 
 The red, green, and blue arms at the center form the 3D crosshair. The status
-bar shows `X`, `Y`, `Z`, and `W` coordinates and the ordinary horizontal (`H`),
-vertical (`V`), and fourth-dimensional (`4D`) view angles.
+bar shows `X`, `Y`, `Z`, and `W` coordinates, the ordinary horizontal (`H`),
+vertical (`V`), and fourth-dimensional (`4D`) view angles, and whether the
+projection view is `SOLID` or `SLICE`.
 The 4D hotbar displays the active layer as a square 3×3 grid. The first digit
 chooses one of its three depth layers and the second chooses the numbered cell;
 the second key must arrive within 600 milliseconds.

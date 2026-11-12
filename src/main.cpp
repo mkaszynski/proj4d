@@ -37,6 +37,8 @@ int main(int argc, char **argv) {
       mode = proj4d::RunMode::TwoDHighSmokeTest;
     } else if (argument == "--4d-inventory-smoke-test") {
       mode = proj4d::RunMode::FourDInventorySmokeTest;
+    } else if (argument == "--4d-slice-smoke-test") {
+      mode = proj4d::RunMode::FourDSliceSmokeTest;
     } else if (argument == "--3d-inventory-smoke-test") {
       mode = proj4d::RunMode::ThreeDInventorySmokeTest;
     } else if (argument == "--2d-inventory-smoke-test") {
@@ -60,6 +62,7 @@ int main(int argc, char **argv) {
                    "--3d-terrain-menu-smoke-test | "
                    "--2d-terrain-menu-smoke-test | "
                    "--4d-inventory-smoke-test | "
+                   "--4d-slice-smoke-test | "
                    "--3d-inventory-smoke-test | "
                    "--2d-inventory-smoke-test | "
                    "--4d-fluid-smoke-test | --3d-fluid-smoke-test | "
