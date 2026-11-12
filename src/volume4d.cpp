@@ -6,6 +6,7 @@
 #include <limits>
 #include <optional>
 #include <thread>
+#include <utility>
 
 namespace proj4d {
 
@@ -186,6 +187,51 @@ bool intersectPlanes(std::span<const Plane> planes, const Vec3 &origin,
     }
   }
   return maximum > std::max(minimum, 0.0);
+}
+
+bool pointInsidePlanes(std::span<const Plane> planes, const Vec3 &point) {
+  return std::ranges::all_of(planes, [&](const Plane &plane) {
+    return dot(plane.normal, point) + plane.offset <= 1.0e-9;
+  });
+}
+
+std::vector<Vec3> centerSlicePolygon(std::span<const Plane> planes) {
+  std::vector<Vec3> polygon{
+      {-1.0, 1.0, 0.0},
+      {1.0, 1.0, 0.0},
+      {1.0, -1.0, 0.0},
+      {-1.0, -1.0, 0.0},
+  };
+  std::vector<Vec3> clipped;
+  for (const Plane &plane : planes) {
+    if (polygon.empty()) {
+      break;
+    }
+    clipped.clear();
+    clipped.reserve(polygon.size() + 1U);
+    Vec3 previous = polygon.back();
+    double previousDistance = dot(plane.normal, previous) + plane.offset;
+    bool previousInside = previousDistance <= 1.0e-9;
+    for (const Vec3 &current : polygon) {
+      const double currentDistance = dot(plane.normal, current) + plane.offset;
+      const bool currentInside = currentDistance <= 1.0e-9;
+      if (currentInside != previousInside) {
+        const double denominator = previousDistance - currentDistance;
+        if (std::abs(denominator) > 1.0e-12) {
+          clipped.push_back(previous + (current - previous) *
+                                           (previousDistance / denominator));
+        }
+      }
+      if (currentInside) {
+        clipped.push_back(current);
+      }
+      previous = current;
+      previousDistance = currentDistance;
+      previousInside = currentInside;
+    }
+    polygon.swap(clipped);
+  }
+  return polygon;
 }
 
 std::array<Plane, 6> visionCubePlanes() {
@@ -369,22 +415,32 @@ AveragedVolumeImage
 renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
                        const VolumeDisplayCamera &camera, int displayWidth,
                        int displayHeight, int maximumWidth,
-                       BlockId immersionMaterial) {
+                       BlockId immersionMaterial, VolumeViewMode viewMode) {
   displayWidth = std::max(1, displayWidth);
   displayHeight = std::max(1, displayHeight);
-  maximumWidth = std::clamp(maximumWidth, 1, maximumVolumeImageWidth);
-  if (volumes.size() > 7000U) {
-    maximumWidth = std::min(maximumWidth, 104);
-  } else if (volumes.size() > 5000U) {
-    maximumWidth = std::min(maximumWidth, 120);
-  } else if (volumes.size() > 3500U) {
-    maximumWidth = std::min(maximumWidth, 136);
+  maximumWidth = std::clamp(maximumWidth, 1,
+                            viewMode == VolumeViewMode::CenterSlice
+                                ? maximumSliceImageWidth
+                                : maximumVolumeImageWidth);
+  if (viewMode == VolumeViewMode::Solid) {
+    if (volumes.size() > 7000U) {
+      maximumWidth = std::min(maximumWidth, 104);
+    } else if (volumes.size() > 5000U) {
+      maximumWidth = std::min(maximumWidth, 120);
+    } else if (volumes.size() > 3500U) {
+      maximumWidth = std::min(maximumWidth, 136);
+    }
   }
   AveragedVolumeImage image;
-  image.width = std::min(displayWidth, maximumWidth);
-  image.height = std::max(
-      1, static_cast<int>(std::lround(static_cast<double>(displayHeight) *
-                                      image.width / displayWidth)));
+  if (viewMode == VolumeViewMode::CenterSlice) {
+    image.width = std::min({displayWidth, displayHeight, maximumWidth});
+    image.height = image.width;
+  } else {
+    image.width = std::min(displayWidth, maximumWidth);
+    image.height = std::max(
+        1, static_cast<int>(std::lround(static_cast<double>(displayHeight) *
+                                        image.width / displayWidth)));
+  }
   const std::size_t pixelCount =
       static_cast<std::size_t>(image.width * image.height);
   image.rgba.assign(pixelCount * 4U, 0U);
@@ -392,24 +448,27 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
   std::vector<double> green(pixelCount, 0.0);
   std::vector<double> blue(pixelCount, 0.0);
   std::vector<double> weight(pixelCount, 0.0);
-  std::vector<PixelRay> rays(pixelCount);
+  std::vector<PixelRay> rays;
 
   const Vec3 origin = displayOrigin(camera);
   const double scale =
       static_cast<double>(std::min(image.width, image.height)) * 1.45;
-  const auto cubePlanes = visionCubePlanes();
-  for (int y = 0; y < image.height; ++y) {
-    for (int x = 0; x < image.width; ++x) {
-      const Vec3 displayDirection{
-          (static_cast<double>(x) + 0.5 - image.width * 0.5) / scale,
-          -(static_cast<double>(y) + 0.5 - image.height * 0.5) / scale, -1.0};
-      PixelRay &ray = rays[static_cast<std::size_t>(y * image.width + x)];
-      ray.direction =
-          normalized(inverseRotateDirection(displayDirection, camera));
-      ray.cubeMinimum = 0.0;
-      ray.cubeMaximum = std::numeric_limits<double>::infinity();
-      ray.intersectsCube = intersectPlanes(cubePlanes, origin, ray.direction,
-                                           ray.cubeMinimum, ray.cubeMaximum);
+  if (viewMode == VolumeViewMode::Solid) {
+    rays.resize(pixelCount);
+    const auto cubePlanes = visionCubePlanes();
+    for (int y = 0; y < image.height; ++y) {
+      for (int x = 0; x < image.width; ++x) {
+        const Vec3 displayDirection{
+            (static_cast<double>(x) + 0.5 - image.width * 0.5) / scale,
+            -(static_cast<double>(y) + 0.5 - image.height * 0.5) / scale, -1.0};
+        PixelRay &ray = rays[static_cast<std::size_t>(y * image.width + x)];
+        ray.direction =
+            normalized(inverseRotateDirection(displayDirection, camera));
+        ray.cubeMinimum = 0.0;
+        ray.cubeMaximum = std::numeric_limits<double>::infinity();
+        ray.intersectsCube = intersectPlanes(cubePlanes, origin, ray.direction,
+                                             ray.cubeMinimum, ray.cubeMaximum);
+      }
     }
   }
 
@@ -418,6 +477,20 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
   for (const ProjectedBoundaryVolume4D &volume : volumes) {
     const auto planes = volumePlanes(volume);
     if (!planes) {
+      continue;
+    }
+    PreparedVolume preparedVolume{
+        *planes,
+        shadedBlockColor(volume.material, volume.brightnessPercent),
+        static_cast<double>(blockOpacity(volume.material)) / 255.0,
+        volume.sourceDepthNumerator,
+        volume.sourceDepthDenominatorConstant,
+        volume.sourceDepthDenominatorGradient,
+        volume.hasSourceDepth,
+        isFluid(volume.material),
+    };
+    if (viewMode == VolumeViewMode::CenterSlice) {
+      prepared.push_back(std::move(preparedVolume));
       continue;
     }
     double minimumX = static_cast<double>(image.width);
@@ -452,169 +525,62 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
                                   image.height - 1);
     const int lastY = std::clamp(static_cast<int>(std::ceil(maximumY)) + 1, 0,
                                  image.height - 1);
-    prepared.push_back({
-        *planes,
-        shadedBlockColor(volume.material, volume.brightnessPercent),
-        static_cast<double>(blockOpacity(volume.material)) / 255.0,
-        volume.sourceDepthNumerator,
-        volume.sourceDepthDenominatorConstant,
-        volume.sourceDepthDenominatorGradient,
-        volume.hasSourceDepth,
-        isFluid(volume.material),
-        firstX,
-        lastX,
-        firstY,
-        lastY,
-    });
+    preparedVolume.firstX = firstX;
+    preparedVolume.lastX = lastX;
+    preparedVolume.firstY = firstY;
+    preparedVolume.lastY = lastY;
+    prepared.push_back(std::move(preparedVolume));
   }
 
-  std::vector<std::vector<std::size_t>> rowCandidates(
-      static_cast<std::size_t>(image.height));
-  for (std::size_t volume = 0; volume < prepared.size(); ++volume) {
-    for (int y = prepared[volume].firstY; y <= prepared[volume].lastY; ++y) {
-      rowCandidates[static_cast<std::size_t>(y)].push_back(volume);
-    }
-  }
-
-  const auto renderRows = [&](int rowBegin, int rowEnd) {
-    std::vector<VolumeEvent> events;
-    std::vector<std::size_t> active;
-    for (int y = rowBegin; y < rowEnd; ++y) {
-      const auto &candidates = rowCandidates[static_cast<std::size_t>(y)];
-      for (int x = 0; x < image.width; ++x) {
-        const std::size_t index = static_cast<std::size_t>(y * image.width + x);
-        const PixelRay &ray = rays[index];
-        if (!ray.intersectsCube) {
-          continue;
-        }
-        events.clear();
-        active.clear();
-        for (const std::size_t volumeIndex : candidates) {
-          const PreparedVolume &volume = prepared[volumeIndex];
-          if (x < volume.firstX || x > volume.lastX) {
-            continue;
-          }
-          double minimum = ray.cubeMinimum;
-          double maximum = ray.cubeMaximum;
-          if (!intersectPlanes(
-                  {volume.planeSet.planes.data(), volume.planeSet.count},
-                  origin, ray.direction, minimum, maximum) ||
-              maximum - minimum <= 1.0e-9) {
-            continue;
-          }
-          events.push_back({volumeIndex, minimum, true});
-          events.push_back({volumeIndex, maximum, false});
-        }
-        if (events.empty()) {
-          const double thickness = ray.cubeMaximum - ray.cubeMinimum;
-          red[index] = static_cast<double>(skyColor.red) * thickness;
-          green[index] = static_cast<double>(skyColor.green) * thickness;
-          blue[index] = static_cast<double>(skyColor.blue) * thickness;
-          weight[index] = thickness;
-          continue;
-        }
-        std::ranges::sort(events, std::less{}, &VolumeEvent::position);
-
-        double pixelRed = 0.0;
-        double pixelGreen = 0.0;
-        double pixelBlue = 0.0;
-        double pixelWeight = 0.0;
-        const auto compositeSegment = [&](double minimum, double maximum) {
-          const double thickness = maximum - minimum;
-          if (thickness <= 1.0e-9) {
-            return;
-          }
-          const double midpoint = (minimum + maximum) * 0.5;
-          const Vec3 point = origin + ray.direction * midpoint;
-          std::size_t nearestOpaque = prepared.size();
-          double nearestOpaqueDepth = std::numeric_limits<double>::infinity();
-          for (const std::size_t volumeIndex : active) {
-            const PreparedVolume &volume = prepared[volumeIndex];
-            if (!volume.hasSourceDepth || volume.fluid) {
-              continue;
-            }
-            const double depth = sourceDepthAt(volume, point);
-            if (depth < nearestOpaqueDepth) {
-              nearestOpaqueDepth = depth;
-              nearestOpaque = volumeIndex;
-            }
-          }
-
-          double coveredOpacity = 0.0;
-          const auto addVolume = [&](const PreparedVolume &volume) {
-            const double contribution = thickness * volume.opacity;
-            pixelRed += static_cast<double>(volume.color.red) * contribution;
-            pixelGreen +=
-                static_cast<double>(volume.color.green) * contribution;
-            pixelBlue += static_cast<double>(volume.color.blue) * contribution;
-            pixelWeight += contribution;
-            coveredOpacity += volume.opacity;
-          };
-          for (const std::size_t volumeIndex : active) {
-            const PreparedVolume &volume = prepared[volumeIndex];
-            if (!volume.hasSourceDepth) {
-              addVolume(volume);
-              continue;
-            }
-            if (!volume.fluid) {
-              if (volumeIndex == nearestOpaque) {
-                addVolume(volume);
-              }
-              continue;
-            }
-            if (sourceDepthAt(volume, point) <= nearestOpaqueDepth + 1.0e-8) {
-              addVolume(volume);
-            }
-          }
-          const double skyContribution =
-              thickness * std::max(0.0, 1.0 - coveredOpacity);
-          pixelRed += static_cast<double>(skyColor.red) * skyContribution;
-          pixelGreen += static_cast<double>(skyColor.green) * skyContribution;
-          pixelBlue += static_cast<double>(skyColor.blue) * skyContribution;
-          pixelWeight += skyContribution;
-        };
-
-        double position = ray.cubeMinimum;
-        std::size_t eventIndex = 0U;
-        while (eventIndex < events.size() &&
-               events[eventIndex].position <= position + 1.0e-9) {
-          if (events[eventIndex].entering) {
-            active.push_back(events[eventIndex].volume);
-          }
-          ++eventIndex;
-        }
-        while (position < ray.cubeMaximum - 1.0e-9) {
-          const double next =
-              eventIndex < events.size()
-                  ? std::min(events[eventIndex].position, ray.cubeMaximum)
-                  : ray.cubeMaximum;
-          compositeSegment(position, next);
-          position = next;
-          const std::size_t groupBegin = eventIndex;
-          while (eventIndex < events.size() &&
-                 std::abs(events[eventIndex].position - position) <= 1.0e-9) {
-            ++eventIndex;
-          }
-          for (std::size_t event = groupBegin; event < eventIndex; ++event) {
-            if (events[event].entering) {
-              active.push_back(events[event].volume);
-              continue;
-            }
-            const auto found = std::ranges::find(active, events[event].volume);
-            if (found != active.end()) {
-              active.erase(found);
-            }
-          }
-          if (next >= ray.cubeMaximum) {
-            break;
-          }
-        }
-        red[index] = pixelRed;
-        green[index] = pixelGreen;
-        blue[index] = pixelBlue;
-        weight[index] = pixelWeight;
+  const auto compositeAtPoint = [&](std::span<const std::size_t> activeVolumes,
+                                    const Vec3 &point, double measure,
+                                    double &pixelRed, double &pixelGreen,
+                                    double &pixelBlue, double &pixelWeight) {
+    std::size_t nearestOpaque = prepared.size();
+    double nearestOpaqueDepth = std::numeric_limits<double>::infinity();
+    for (const std::size_t volumeIndex : activeVolumes) {
+      const PreparedVolume &volume = prepared[volumeIndex];
+      if (!volume.hasSourceDepth || volume.fluid) {
+        continue;
+      }
+      const double depth = sourceDepthAt(volume, point);
+      if (depth < nearestOpaqueDepth) {
+        nearestOpaqueDepth = depth;
+        nearestOpaque = volumeIndex;
       }
     }
+
+    double coveredOpacity = 0.0;
+    const auto addVolume = [&](const PreparedVolume &volume) {
+      const double contribution = measure * volume.opacity;
+      pixelRed += static_cast<double>(volume.color.red) * contribution;
+      pixelGreen += static_cast<double>(volume.color.green) * contribution;
+      pixelBlue += static_cast<double>(volume.color.blue) * contribution;
+      pixelWeight += contribution;
+      coveredOpacity += volume.opacity;
+    };
+    for (const std::size_t volumeIndex : activeVolumes) {
+      const PreparedVolume &volume = prepared[volumeIndex];
+      if (!volume.hasSourceDepth) {
+        addVolume(volume);
+        continue;
+      }
+      if (!volume.fluid) {
+        if (volumeIndex == nearestOpaque) {
+          addVolume(volume);
+        }
+        continue;
+      }
+      if (sourceDepthAt(volume, point) <= nearestOpaqueDepth + 1.0e-8) {
+        addVolume(volume);
+      }
+    }
+    const double skyContribution =
+        measure * std::max(0.0, 1.0 - coveredOpacity);
+    pixelRed += static_cast<double>(skyColor.red) * skyContribution;
+    pixelGreen += static_cast<double>(skyColor.green) * skyContribution;
+    pixelBlue += static_cast<double>(skyColor.blue) * skyContribution;
+    pixelWeight += skyContribution;
   };
 
   const unsigned hardwareThreads =
@@ -622,22 +588,197 @@ renderAveragedVolume4D(std::span<const ProjectedBoundaryVolume4D> volumes,
   const int workerCount =
       std::max(1, std::min({8, static_cast<int>(hardwareThreads),
                             std::max(1, image.height / 16)}));
-  std::vector<std::jthread> workers;
-  workers.reserve(static_cast<std::size_t>(workerCount));
-  for (int worker = 0; worker < workerCount; ++worker) {
-    const int begin = image.height * worker / workerCount;
-    const int end = image.height * (worker + 1) / workerCount;
-    workers.emplace_back(renderRows, begin, end);
+  const auto runWorkers = [&](const auto &renderRows) {
+    std::vector<std::jthread> workers;
+    workers.reserve(static_cast<std::size_t>(workerCount));
+    for (int worker = 0; worker < workerCount; ++worker) {
+      const int begin = image.height * worker / workerCount;
+      const int end = image.height * (worker + 1) / workerCount;
+      workers.emplace_back(renderRows, begin, end);
+    }
+  };
+
+  std::vector<std::vector<std::size_t>> rowCandidates(
+      static_cast<std::size_t>(image.height));
+  if (viewMode == VolumeViewMode::CenterSlice) {
+    for (std::size_t volumeIndex = 0; volumeIndex < prepared.size();
+         ++volumeIndex) {
+      PreparedVolume &volume = prepared[volumeIndex];
+      const std::vector<Vec3> polygon = centerSlicePolygon(
+          {volume.planeSet.planes.data(), volume.planeSet.count});
+      if (polygon.empty()) {
+        volume.lastY = -1;
+        continue;
+      }
+      double minimumX = 1.0;
+      double maximumX = -1.0;
+      double minimumY = 1.0;
+      double maximumY = -1.0;
+      for (const Vec3 &point : polygon) {
+        minimumX = std::min(minimumX, point.x);
+        maximumX = std::max(maximumX, point.x);
+        minimumY = std::min(minimumY, point.y);
+        maximumY = std::max(maximumY, point.y);
+      }
+      volume.firstX = std::clamp(
+          static_cast<int>(std::floor((minimumX + 1.0) * image.width * 0.5)) -
+              1,
+          0, image.width - 1);
+      volume.lastX = std::clamp(
+          static_cast<int>(std::ceil((maximumX + 1.0) * image.width * 0.5)) + 1,
+          0, image.width - 1);
+      volume.firstY = std::clamp(
+          static_cast<int>(std::floor((1.0 - maximumY) * image.height * 0.5)) -
+              1,
+          0, image.height - 1);
+      volume.lastY = std::clamp(
+          static_cast<int>(std::ceil((1.0 - minimumY) * image.height * 0.5)) +
+              1,
+          0, image.height - 1);
+      for (int y = volume.firstY; y <= volume.lastY; ++y) {
+        rowCandidates[static_cast<std::size_t>(y)].push_back(volumeIndex);
+      }
+    }
+    const auto renderSliceRows = [&](int rowBegin, int rowEnd) {
+      std::vector<std::size_t> active;
+      for (int y = rowBegin; y < rowEnd; ++y) {
+        const auto &candidates = rowCandidates[static_cast<std::size_t>(y)];
+        const double pointY =
+            1.0 - (static_cast<double>(y) + 0.5) * 2.0 / image.height;
+        for (int x = 0; x < image.width; ++x) {
+          const std::size_t index =
+              static_cast<std::size_t>(y * image.width + x);
+          const Vec3 point{-1.0 + (static_cast<double>(x) + 0.5) * 2.0 /
+                                      image.width,
+                           pointY, 0.0};
+          active.clear();
+          for (const std::size_t volumeIndex : candidates) {
+            const PreparedVolume &volume = prepared[volumeIndex];
+            if (x < volume.firstX || x > volume.lastX ||
+                !pointInsidePlanes(
+                    {volume.planeSet.planes.data(), volume.planeSet.count},
+                    point)) {
+              continue;
+            }
+            active.push_back(volumeIndex);
+          }
+          compositeAtPoint(active, point, 1.0, red[index], green[index],
+                           blue[index], weight[index]);
+        }
+      }
+    };
+    runWorkers(renderSliceRows);
+  } else {
+    for (std::size_t volume = 0; volume < prepared.size(); ++volume) {
+      for (int y = prepared[volume].firstY; y <= prepared[volume].lastY; ++y) {
+        rowCandidates[static_cast<std::size_t>(y)].push_back(volume);
+      }
+    }
+    const auto renderSolidRows = [&](int rowBegin, int rowEnd) {
+      std::vector<VolumeEvent> events;
+      std::vector<std::size_t> active;
+      for (int y = rowBegin; y < rowEnd; ++y) {
+        const auto &candidates = rowCandidates[static_cast<std::size_t>(y)];
+        for (int x = 0; x < image.width; ++x) {
+          const std::size_t index =
+              static_cast<std::size_t>(y * image.width + x);
+          const PixelRay &ray = rays[index];
+          if (!ray.intersectsCube) {
+            continue;
+          }
+          events.clear();
+          active.clear();
+          for (const std::size_t volumeIndex : candidates) {
+            const PreparedVolume &volume = prepared[volumeIndex];
+            if (x < volume.firstX || x > volume.lastX) {
+              continue;
+            }
+            double minimum = ray.cubeMinimum;
+            double maximum = ray.cubeMaximum;
+            if (!intersectPlanes(
+                    {volume.planeSet.planes.data(), volume.planeSet.count},
+                    origin, ray.direction, minimum, maximum) ||
+                maximum - minimum <= 1.0e-9) {
+              continue;
+            }
+            events.push_back({volumeIndex, minimum, true});
+            events.push_back({volumeIndex, maximum, false});
+          }
+          if (events.empty()) {
+            const double thickness = ray.cubeMaximum - ray.cubeMinimum;
+            red[index] = static_cast<double>(skyColor.red) * thickness;
+            green[index] = static_cast<double>(skyColor.green) * thickness;
+            blue[index] = static_cast<double>(skyColor.blue) * thickness;
+            weight[index] = thickness;
+            continue;
+          }
+          std::ranges::sort(events, std::less{}, &VolumeEvent::position);
+
+          double pixelRed = 0.0;
+          double pixelGreen = 0.0;
+          double pixelBlue = 0.0;
+          double pixelWeight = 0.0;
+          const auto compositeSegment = [&](double minimum, double maximum) {
+            const double thickness = maximum - minimum;
+            if (thickness <= 1.0e-9) {
+              return;
+            }
+            const double midpoint = (minimum + maximum) * 0.5;
+            const Vec3 point = origin + ray.direction * midpoint;
+            compositeAtPoint(active, point, thickness, pixelRed, pixelGreen,
+                             pixelBlue, pixelWeight);
+          };
+
+          double position = ray.cubeMinimum;
+          std::size_t eventIndex = 0U;
+          while (eventIndex < events.size() &&
+                 events[eventIndex].position <= position + 1.0e-9) {
+            if (events[eventIndex].entering) {
+              active.push_back(events[eventIndex].volume);
+            }
+            ++eventIndex;
+          }
+          while (position < ray.cubeMaximum - 1.0e-9) {
+            const double next =
+                eventIndex < events.size()
+                    ? std::min(events[eventIndex].position, ray.cubeMaximum)
+                    : ray.cubeMaximum;
+            compositeSegment(position, next);
+            position = next;
+            const std::size_t groupBegin = eventIndex;
+            while (eventIndex < events.size() &&
+                   std::abs(events[eventIndex].position - position) <= 1.0e-9) {
+              ++eventIndex;
+            }
+            for (std::size_t event = groupBegin; event < eventIndex; ++event) {
+              if (events[event].entering) {
+                active.push_back(events[event].volume);
+                continue;
+              }
+              const auto found =
+                  std::ranges::find(active, events[event].volume);
+              if (found != active.end()) {
+                active.erase(found);
+              }
+            }
+            if (next >= ray.cubeMaximum) {
+              break;
+            }
+          }
+          red[index] = pixelRed;
+          green[index] = pixelGreen;
+          blue[index] = pixelBlue;
+          weight[index] = pixelWeight;
+        }
+      }
+    };
+    runWorkers(renderSolidRows);
   }
-  workers.clear();
 
   for (std::size_t index = 0; index < pixelCount; ++index) {
-    if (!rays[index].intersectsCube) {
+    if ((viewMode == VolumeViewMode::Solid && !rays[index].intersectsCube) ||
+        weight[index] <= 1.0e-6) {
       image.rgba[index * 4U + 3U] = 0U;
-      continue;
-    }
-    if (weight[index] <= 1.0e-6) {
-      image.rgba[index * 4U + 3U] = 255U;
       continue;
     }
     image.rgba[index * 4U] = static_cast<std::uint8_t>(

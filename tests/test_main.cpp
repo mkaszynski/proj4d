@@ -1682,6 +1682,13 @@ void testDimensionNativeInventoryCraftingAndGameplay() {
 }
 
 void testAveragedFourDimensionalVolumeColor() {
+  expect(proj4d::toggledVolumeViewMode(proj4d::VolumeViewMode::Solid) ==
+                 proj4d::VolumeViewMode::CenterSlice &&
+             proj4d::toggledVolumeViewMode(proj4d::toggledVolumeViewMode(
+                 proj4d::VolumeViewMode::Solid)) ==
+                 proj4d::VolumeViewMode::Solid,
+         "the projection view toggle switches to the slice and back to the "
+         "solid default");
   std::array<int, 8> directionalShades{};
   for (int axis = 0; axis < 4; ++axis) {
     directionalShades[static_cast<std::size_t>(axis * 2)] =
@@ -1732,6 +1739,55 @@ void testAveragedFourDimensionalVolumeColor() {
              skyMixed.rgba[center + 2] > grassColor.blue &&
              skyMixed.rgba[center + 2] < proj4d::skyColor.blue,
          "empty path length inside the vision cube contributes blue sky");
+
+  const auto centerSlice = proj4d::renderAveragedVolume4D(
+      partialVolume, camera, 41, 41, 41, proj4d::BlockId::air,
+      proj4d::VolumeViewMode::CenterSlice);
+  expect(centerSlice.rgba[center] == grassColor.red &&
+             centerSlice.rgba[center + 1U] == grassColor.green &&
+             centerSlice.rgba[center + 2U] == grassColor.blue &&
+             centerSlice.rgba[center + 3U] == 255U,
+         "the centered slice samples one square plane instead of averaging "
+         "the solid projection depth");
+  const auto orbitIndependentSlice = proj4d::renderAveragedVolume4D(
+      partialVolume, {1.1, -0.45, 6.0}, 41, 41, 41, proj4d::BlockId::air,
+      proj4d::VolumeViewMode::CenterSlice);
+  expect(orbitIndependentSlice.rgba == centerSlice.rgba,
+         "external vision-cube orbit reuses the same projected slice texture");
+  expect(proj4d::maximumSliceImageWidth == proj4d::maximumVolumeImageWidth * 2,
+         "the thin slice has twice the solid view's linear resolution cap");
+
+  proj4d::ProjectedBoundaryVolume4D awayFromSlice = first;
+  for (int mask = 0; mask < 8; ++mask) {
+    awayFromSlice.vertices[static_cast<std::size_t>(mask)].z =
+        (mask & 4) != 0 ? 0.75 : 0.25;
+  }
+  const auto emptyCenterSlice = proj4d::renderAveragedVolume4D(
+      std::array{awayFromSlice}, camera, 41, 41, 41, proj4d::BlockId::air,
+      proj4d::VolumeViewMode::CenterSlice);
+  expect(emptyCenterSlice.rgba[center] == proj4d::skyColor.red &&
+             emptyCenterSlice.rgba[center + 1U] == proj4d::skyColor.green &&
+             emptyCenterSlice.rgba[center + 2U] == proj4d::skyColor.blue,
+         "projected material away from z=0 does not leak into the centered "
+         "slice");
+  const auto zoomedSlice = proj4d::renderAveragedVolume4D(
+      std::span<const proj4d::ProjectedBoundaryVolume4D>{}, {0.0, 0.0, 6.5}, 41,
+      41, 41, proj4d::BlockId::air, proj4d::VolumeViewMode::CenterSlice);
+  bool completeSliceTexture = true;
+  for (std::size_t index = 3U; index < zoomedSlice.rgba.size(); index += 4U) {
+    completeSliceTexture =
+        completeSliceTexture && zoomedSlice.rgba[index] == 255U;
+  }
+  expect(zoomedSlice.width == 41 && zoomedSlice.height == 41 &&
+             completeSliceTexture,
+         "the centered projection slice produces one complete square texture");
+  const auto maximumResolutionSlice = proj4d::renderAveragedVolume4D(
+      std::span<const proj4d::ProjectedBoundaryVolume4D>{}, camera, 800, 600,
+      proj4d::maximumSliceImageWidth, proj4d::BlockId::air,
+      proj4d::VolumeViewMode::CenterSlice);
+  expect(maximumResolutionSlice.width == proj4d::maximumSliceImageWidth &&
+             maximumResolutionSlice.height == proj4d::maximumSliceImageWidth,
+         "the slice renderer uses its higher square resolution cap");
 
   proj4d::ProjectedBoundaryVolume4D second = first;
   second.material = proj4d::BlockId::lava;
@@ -1854,6 +1910,14 @@ void testAveragedFourDimensionalVolumeColor() {
   expect(differingBeyondRounding(alignedImage, nearOnlyImage) == 0U,
          "an aligned opaque 4D boundary completely covers every farther "
          "projected segment");
+  const auto alignedSlice = proj4d::renderAveragedVolume4D(
+      alignedVolumes, {0.0, 0.0, 3.8}, 65, 65, 65, proj4d::BlockId::air,
+      proj4d::VolumeViewMode::CenterSlice);
+  const auto nearOnlySlice = proj4d::renderAveragedVolume4D(
+      nearOnlyVolumes, {0.0, 0.0, 3.8}, 65, 65, 65, proj4d::BlockId::air,
+      proj4d::VolumeViewMode::CenterSlice);
+  expect(differingBeyondRounding(alignedSlice, nearOnlySlice) == 0U,
+         "the centered slice retains nearest-opaque source-depth occlusion");
 
   for (int sourceAxis = 0; sourceAxis < 4; ++sourceAxis) {
     proj4d::Camera4D axisCamera;

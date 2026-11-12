@@ -20,6 +20,7 @@ enum class RunMode {
   TwoDLowSmokeTest,
   TwoDHighSmokeTest,
   FourDInventorySmokeTest,
+  FourDSliceSmokeTest,
   ThreeDInventorySmokeTest,
   TwoDInventorySmokeTest,
   FourDFluidSmokeTest,
